@@ -43,7 +43,7 @@ D:
 ```
 
 ```bash
-D:cd Apps\index-tts
+cd Apps\index-tts
 ```
 
 
