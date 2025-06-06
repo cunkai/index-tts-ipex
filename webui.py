@@ -114,7 +114,7 @@ with gr.Blocks(title="IndexTTS Demo") as demo:
             if prompt_list:
                 default = prompt_list[0]
             with gr.Column():
-                input_text_single = gr.TextArea(label="文本",key="input_text_single", placeholder="请输入目标文本", info="当前模型版本{}".format(tts.model_version or "1.0"))
+                input_text_single = gr.TextArea(label="文本",key="input_text_single", placeholder="请输入目标文本或拼音", info="当前模型版本{}".format(tts.model_version or "1.0"))
                 infer_mode = gr.Radio(choices=["普通推理", "批次推理"], label="推理模式",info="批次推理：更适合长句，性能翻倍",value="普通推理")        
                 gen_button = gr.Button("生成语音", key="gen_button",interactive=True)
             output_audio = gr.Audio(label="生成结果", visible=True,key="output_audio")
@@ -180,7 +180,7 @@ with gr.Blocks(title="IndexTTS Demo") as demo:
                 sentences_preview: gr.update(value=data, visible=True, type="array"),
             }
         else:
-            df = pd.DataFrame([], columns=["序号", "分句内容", "Token数"])
+            df = gr.DataFrame([], columns=["序号", "分句内容", "Token数"])
             return {
                 sentences_preview: gr.update(value=df)
             }

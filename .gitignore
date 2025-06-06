@@ -14,3 +14,4 @@ build/
 *.egg-info/
 .venv
 checkpoints/
+python/
