@@ -4,7 +4,7 @@
 <img src='assets/index_icon.png' width="250"/>
 </div>
 
-bigvgan: 100%|██████████████████████| 1/1 [00:08<00:00,  8.00s/it]
+[🎬 生成效果展示](https://www.bilibili.com/video/BV14WTNzoE3w)
 
 
 Intel环境设置:
