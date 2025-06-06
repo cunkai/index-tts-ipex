@@ -16,3 +16,4 @@ build/
 checkpoints/
 python/
 启动.bat
+pinyin_rules/
