@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>高级语音合成界面</title>
+    <script src="https://unpkg.com/wavesurfer.js@6.6.3/dist/wavesurfer.min.js"></script>
+    <script src="https://unpkg.com/wavesurfer.js@6.6.3/dist/plugin/wavesurfer.regions.min.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div id="ruleset-editor-backdrop"></div>
+    <div class="container">
+        <header>
+            <h1>语音合成引擎</h1>
+        </header>
+
+        <main>
+            <section class="panel reference-audio-panel">
+                <h2>参考音频</h2>
+                <div class="audio-controls">
+                    <div class="upload-section">
+                        <label for="ref-audio-upload" class="button">上传新参考音频</label>
+                        <input type="file" id="ref-audio-upload" accept="audio/*" style="display: none;">
+                        <span id="uploaded-ref-filename"></span>
+                    </div>
+                    <div class="history-section">
+                        <label for="ref-audio-history">或选择历史记录:</label>
+                        <select id="ref-audio-history">
+                            <option value="">-- 选择或上传音频 --</option>
+                        </select>
+                    </div>
+                </div>
+                 <!-- New section for saved voices -->
+                <div class="saved-voices-section" style="margin-top: 15px;">
+                    <label for="saved-voices-list">或选择已保存的声音特征:</label>
+                    <div id="saved-voices-list-container" style="max-height: 150px; overflow-y: auto; border: 1px solid #eee; padding: 5px; margin-top:5px;">
+                        <!-- JS will populate this -->
+                    </div>
+                </div>
+                <div id="reference-audio-player-container" style="display:none;">
+                    <div id="waveform-container"></div>
+                    <div id="waveform-controls" style="margin-top: 10px;">
+                        <button id="wf-play-pause-btn" class="button-small" disabled>播放</button>
+                        <button id="wf-stop-btn" class="button-small" disabled>停止</button>
+                    </div>
+                    <div class="crop-controls">
+                        <p>剪切参考音频 (秒) - 最大允许 {{ MAX_REFERENCE_AUDIO_DURATION_SEC | default(60) }} 秒处理:</p>
+                        <label for="crop-start">开始:</label>
+                        <input type="number" id="crop-start" min="0" step="0.01" placeholder="0.00" readonly>
+                        <label for="crop-end">结束:</label>
+                        <input type="number" id="crop-end" min="0" step="0.01" placeholder="完整" readonly>
+                        <button id="clear-crop-region-btn" class="button-small">清除选区</button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="panel text-input-panel">
+                <h2>输入文本</h2>
+                <textarea id="text-input" rows="8" placeholder="在此输入您想要合成的文本..."></textarea>
+            </section>
+
+            <section class="panel replacement-rules-panel collapsible open">
+                <h2 class="collapsible-trigger">替换规则 <span class="arrow">▼</span></h2>
+                <div class="collapsible-content">
+                    <div class="ruleset-management">
+                        <button id="create-new-ruleset-btn" class="button-small">创建新规则集</button>
+                    </div>
+                    <div id="ruleset-list-container" style="margin-top: 10px; max-height: 200px; overflow-y: auto; border: 1px solid #eee; padding: 5px;">
+                        <!-- JS will populate this with ruleset items -->
+                    </div>
+                    <hr class="ruleset-divider" style="margin-top:15px;">
+                    <div class="preview-section">
+                        <h3>文本替换预览 (应用当前规则):</h3>
+                        <div id="replacement-preview" class="preview-box"></div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="ruleset-editor-panel" class="panel" style="display:none;">
+                <h2 id="ruleset-editor-title">编辑规则集</h2>
+                <div>
+                    <label for="ruleset-name-input" style="display:block; margin-bottom:5px;">规则集名称:</label>
+                    <input type="text" id="ruleset-name-input" placeholder="例如: 我的常用规则">
+                </div>
+                <h3 style="margin-top:20px; margin-bottom:10px; font-size:1.1em; color:#34495e;">规则列表:</h3>
+                <div id="editor-replacement-rules-container" style="margin-top:5px; margin-bottom:15px;">
+                    <!-- Dynamic replacement rule inputs will go here -->
+                </div>
+                <button id="editor-add-replacement-rule" class="button-small">添加单条规则</button>
+                <hr style="margin: 20px 0;">
+                <div class="ruleset-editor-actions">
+                    <button id="editor-save-ruleset-btn" class="button-primary">保存规则集</button>
+                    <button id="editor-delete-ruleset-btn" class="button" style="background-color: #e74c3c; display:none;">删除此规则集</button>
+                    <button id="editor-close-ruleset-btn" class="button" style="margin-left:auto;">关闭编辑器</button>
+                </div>
+                <div id="ruleset-editor-status" class="status" style="margin-top: 15px;"></div>
+            </section>
+
+            <section class="panel advanced-settings-panel collapsible">
+                <h2 class="collapsible-trigger">高级合成设置 <span class="arrow">▼</span></h2>
+                <div class="collapsible-content">
+                    <form id="advanced-settings-form">
+                        <!-- Advanced settings will be populated by JavaScript -->
+                    </form>
+                    <button id="reset-advanced-settings-btn" class="button-small" style="margin-top: 15px;">恢复默认设置</button>
+                </div>
+            </section>
+
+            <section class="panel synthesis-controls-panel">
+                 <div class="synthesis-buttons-container">
+                    <button id="synthesize-normal-button" class="button-primary" data-infer-mode="普通推理">普通推理合成</button>
+                    <button id="synthesize-batch-button" class="button-primary" data-infer-mode="批次推理">批次推理合成</button>
+                </div>
+                <div id="status-message" class="status"></div>
+                 <!-- Container for the save voice feature button -->
+                <div id="save-voice-feature-container" style="text-align: center; margin-top: 15px; display: none;">
+                    <button id="save-voice-feature-btn" class="button">保存当前声音特征</button>
+                </div>
+            </section>
+
+            <section class="panel output-panel" style="display:none;">
+                <h2>合成结果</h2>
+                <audio id="output-audio-player" controls autoplay></audio>
+                <a id="download-audio-link" href="#" download="synthesized_audio.wav" class="button" style="display:none;">下载音频</a>
+            </section>
+        </main>
+        <footer><p>© 2025 语音合成</p></footer>
+    </div>
+    <script>
+        const MAX_REF_DURATION = parseFloat("{{ MAX_REFERENCE_AUDIO_DURATION_SEC | default(60) }}");
+    </script>
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+</body>
+</html>

@@ -17,3 +17,6 @@ checkpoints/
 python/
 启动.bat
 pinyin_rules/
+replacement_rulesets/
+static/reference_audios/
+temp_audio/
