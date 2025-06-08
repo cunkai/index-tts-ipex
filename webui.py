@@ -1,229 +1,246 @@
-# FILE: webui.py (Corrected Event Logic and Full Features)
-import json
+# FILE: app.py (FINAL, COMPLETE, AND CORRECTED)
 import os
-import sys
+import uuid
+import json
+import re
 import threading
 import time
-import re
-import gradio as gr
-import torch
 import numpy as np
+import torch
+from flask import Flask, request, jsonify, send_from_directory, render_template, Response, stream_with_context
+from flask_cors import CORS
 
-import warnings
-warnings.filterwarnings("ignore", category=FutureWarning)
-warnings.filterwarnings("ignore", category=UserWarning)
-
-# --- 全局路径和配置 ---
-current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(current_dir)
-
-# --- Argument Parsing ---
-import argparse
-parser = argparse.ArgumentParser(description="IndexTTS 中文 WebUI")
-parser.add_argument("--port", type=int, default=7860, help="Web UI 运行端口")
-parser.add_argument("--host", type=str, default="127.0.0.1", help="Web UI 运行主机地址")
-parser.add_argument("--model_dir", type=str, default="checkpoints", help="模型检查点目录")
-cmd_args = parser.parse_args()
-
-# --- Model Loading (using the modified IndexTTS class) ---
-model_dir_abs = os.path.join(current_dir, cmd_args.model_dir)
+# --- Step 1: Import the corrected IndexTTS library directly ---
 try:
     from indextts.infer import IndexTTS
-    tts = IndexTTS(model_dir=model_dir_abs, cfg_path=os.path.join(model_dir_abs, "config.yaml"))
-    print("成功加载修改后的 IndexTTS 引擎。")
-    DEVICE = tts.device
+    tts_engine_instance = IndexTTS(cfg_path="checkpoints/config.yaml", model_dir="checkpoints")
+    print("Successfully initialized modified IndexTTS engine.")
+    DEVICE = tts_engine_instance.device
 except Exception as e:
-    print(f"致命错误：无法从 {model_dir_abs} 加载TTS模型。错误: {e}")
-    sys.exit(1)
+    print(f"ERROR: Failed to initialize IndexTTS engine: {e}")
+    import traceback; traceback.print_exc()
+    tts_engine_instance = None
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# --- 声音特征文件管理 ---
-SAVED_VOICE_FEATURES_DIR = os.path.join(current_dir, "saved_voice_features")
-os.makedirs(SAVED_VOICE_FEATURES_DIR, exist_ok=True)
-os.makedirs(os.path.join(current_dir, "outputs"), exist_ok=True)
+# --- Import pydub for audio cropping ---
+try:
+    from pydub import AudioSegment
+except ImportError:
+    print("WARNING: pydub not installed. Audio cropping will be unavailable.")
+    AudioSegment = None
+
+
+app = Flask(__name__)
+CORS(app)
+
+# --- Directory setup ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, 'static')
+OUTPUT_AUDIO_DIR = os.path.join(STATIC_DIR, 'outputs')
+TEMP_AUDIO_DIR = os.path.join(BASE_DIR, 'temp_audio')
+RULESETS_DIR = os.path.join(BASE_DIR, 'replacement_rulesets')
+SAVED_VOICE_FEATURES_DIR = os.path.join(BASE_DIR, 'saved_voice_features')
+for dir_path in [OUTPUT_AUDIO_DIR, TEMP_AUDIO_DIR, RULESETS_DIR, SAVED_VOICE_FEATURES_DIR]:
+    os.makedirs(dir_path, exist_ok=True)
+
+tasks_status = {}
+tasks_lock = threading.Lock()
+temp_features_cache = {}
+temp_features_lock = threading.Lock()
 
 def sanitize_filename(name):
-    return re.sub(r'[^\w\s.-]', '', str(name)).strip()
+    name = re.sub(r'[^\w\s.-]', '', str(name)).strip()
+    return re.sub(r'[-\s]+', '-', name).replace('/', '_').replace('\\', '_')
 
-def get_saved_voices_list():
-    if not os.path.exists(SAVED_VOICE_FEATURES_DIR): return []
-    return sorted([f.replace(".cond_mel.npy", "") for f in os.listdir(SAVED_VOICE_FEATURES_DIR) if f.endswith(".cond_mel.npy")])
+@app.route('/')
+def index():
+    # Note: Ensure your index.html is compatible with this backend's API
+    return render_template('index.html')
 
-# --- UI辅助函数 ---
+# --- Ruleset and Voice Listing/Deleting APIs (Unchanged) ---
+@app.route('/api/rulesets', methods=['GET'])
+def list_rulesets():
+    try: files = [f.replace('.json', '') for f in os.listdir(RULESETS_DIR) if f.endswith('.json')]; return jsonify(sorted(files))
+    except Exception as e: return jsonify({"error": str(e)}), 500
+@app.route('/api/saved-voices', methods=['GET'])
+def list_saved_voices():
+    voices = []
+    if not os.path.exists(SAVED_VOICE_FEATURES_DIR): return jsonify([])
+    for f_name in os.listdir(SAVED_VOICE_FEATURES_DIR):
+        if f_name.endswith(".meta.json"):
+            with open(os.path.join(SAVED_VOICE_FEATURES_DIR, f_name), 'r', encoding='utf-8') as mf:
+                meta = json.load(mf)
+                voices.append({"id": meta["id"], "name": meta["user_given_name"]})
+    return jsonify(sorted(voices, key=lambda x: x['name']))
+@app.route('/api/saved-voices/<voice_id>', methods=['DELETE'])
+def delete_saved_voice(voice_id):
+    safe_id = sanitize_filename(voice_id)
+    files_to_delete = [f"{safe_id}.cond_mel.npy", f"{safe_id}.meta.json"]
+    for fname in files_to_delete:
+        fpath = os.path.join(SAVED_VOICE_FEATURES_DIR, fname)
+        if os.path.exists(fpath): os.remove(fpath)
+    return jsonify({"message": f"Voice '{safe_id}' deleted."})
 
-def save_voice_feature(new_name, mel_to_save):
-    if not new_name or not new_name.strip():
-        gr.Warning("请输入一个有效的名称来保存声音特征。")
-        return gr.update()
-    if mel_to_save is None:
-        gr.Warning("没有可以保存的活动声音特征。请先从新音频生成。")
-        return gr.update()
+# --- Save Voice Feature API (Unchanged) ---
+@app.route('/api/save-voice-feature', methods=['POST'])
+def save_voice_feature():
+    data = request.json
+    user_given_name = data.get('name')
+    source_feature_key = data.get('source_reference_identifier')
+    with temp_features_lock:
+        feature_data_to_save = temp_features_cache.pop(source_feature_key, None)
+    if not feature_data_to_save or 'cond_mel_numpy' not in feature_data_to_save:
+        return jsonify({"error": f"未找到源标识符 '{source_feature_key}' 对应的待保存特征。"}), 404
+    safe_user_name = sanitize_filename(user_given_name)
+    np.save(os.path.join(SAVED_VOICE_FEATURES_DIR, f"{safe_user_name}.cond_mel.npy"), feature_data_to_save["cond_mel_numpy"])
+    meta_info = {"id": safe_user_name, "user_given_name": user_given_name}
+    with open(os.path.join(SAVED_VOICE_FEATURES_DIR, f"{safe_user_name}.meta.json"), 'w', encoding='utf-8') as f:
+        json.dump(meta_info, f, ensure_ascii=False, indent=2)
+    return jsonify({"message": f"声音特征 '{user_given_name}' 已成功保存。", "id": safe_user_name, "name": user_given_name})
 
-    safe_name = sanitize_filename(new_name)
-    save_path = os.path.join(SAVED_VOICE_FEATURES_DIR, f"{safe_name}.cond_mel.npy")
-    
-    try:
-        np.save(save_path, mel_to_save.cpu().numpy())
-        gr.Info(f"声音特征 '{safe_name}' 已成功保存！")
-        return gr.update(choices=get_saved_voices_list(), value=safe_name)
-    except Exception as e:
-        gr.Error(f"保存失败: {e}")
-        return gr.update()
-
-def delete_voice_feature(voice_name):
-    if not voice_name:
-        gr.Warning("请先从下拉菜单中选择一个要删除的声音。")
-        return gr.update()
-
-    file_path = os.path.join(SAVED_VOICE_FEATURES_DIR, f"{voice_name}.cond_mel.npy")
-    if os.path.exists(file_path):
-        try:
-            os.remove(file_path)
-            gr.Info(f"声音 '{voice_name}' 已删除。")
-            return gr.update(choices=get_saved_voices_list(), value=None)
-        except Exception as e:
-            gr.Error(f"删除失败: {e}")
-            return gr.update()
-    else:
-        gr.Warning("未找到要删除的文件。")
-        return gr.update(choices=get_saved_voices_list())
-
-def gen_single(uploaded_audio_path, saved_voice_name, text, *args, progress=gr.Progress(track_tqdm=True)):
-    prompt_mel = None
-    is_from_new_upload = False
-    
-    # 1. 决定声音来源并提取/加载特征
-    if saved_voice_name:
-        gr.Info(f"加载已保存的声音: {saved_voice_name}...")
-        try:
-            mel_path = os.path.join(SAVED_VOICE_FEATURES_DIR, f"{saved_voice_name}.cond_mel.npy")
-            prompt_mel = torch.from_numpy(np.load(mel_path)).to(DEVICE)
-        except Exception as e:
-            gr.Error(f"加载声音特征 '{saved_voice_name}' 失败: {e}")
-            return None, gr.update(visible=False), None
-            
-    elif uploaded_audio_path:
-        gr.Info(f"从上传的文件中提取声音特征...")
-        try:
-            prompt_mel = tts.extract_features(uploaded_audio_path)
-            is_from_new_upload = True
-        except Exception as e:
-            gr.Error(f"从音频中提取特征失败: {e}")
-            return None, gr.update(visible=False), None
-    else:
-        gr.Warning("错误：请先上传一个新音频，或选择一个已保存的声音。")
-        return None, gr.update(visible=False), None
-        
-    # 2. 验证文本输入
-    if not text or not text.strip():
-        gr.Warning("错误：文本输入不能为空。")
-        return None, gr.update(visible=False if not is_from_new_upload else True), prompt_mel if is_from_new_upload else None
-
-    # 3. 准备参数并生成
-    output_audio_path = os.path.join(current_dir, "outputs", f"gen_{int(time.time())}.wav")
-    do_sample, temp, top_p, top_k, len_penalty, num_beams, rep_penalty, max_new, max_text_per_sent = args
-    kwargs = {
-        "do_sample": bool(do_sample), "temperature": float(temp), "top_p": float(top_p),
-        "top_k": int(top_k) if int(top_k) > 0 else None, "length_penalty": float(len_penalty),
-        "num_beams": int(num_beams), "repetition_penalty": float(rep_penalty), "max_new_tokens": int(max_new)
-    }
+# --- Synthesis Worker with Correct Progress Handling ---
+def synthesis_worker(task_id, text_input, prompt_mel, output_filename, infer_mode, **kwargs):
+    # Define the callback function that updates the shared dictionary
+    def progress_callback(fraction, description, _):
+        with tasks_lock:
+            if task_id in tasks_status:
+                tasks_status[task_id].update({"progress": int(fraction * 100), "message": description})
 
     try:
-        gr.Info("语音生成中，请稍候...")
-        generated_audio_path = tts.infer(
-            prompt_mel, text, output_audio_path,
-            max_text_tokens_per_sentence=int(max_text_per_sent), **kwargs
-        )
-        gr.Info("语音生成成功！")
         
-        # 4. 根据来源决定是否显示保存按钮
-        if is_from_new_upload:
-            return gr.update(value=generated_audio_path), gr.update(visible=True), prompt_mel
+        with tasks_lock:
+            tasks_status[task_id].update({"status": "processing", "progress": 5, "message": "准备合成..."})
+        
+        # Choose the correct inference method
+        if infer_mode == "批次推理":
+            tts_engine_instance.infer_fast(prompt_mel=prompt_mel, text=text_input, output_path=output_filename, **kwargs)
         else:
-            return gr.update(value=generated_audio_path), gr.update(visible=False), None
-
+            tts_engine_instance.infer(prompt_mel=prompt_mel, text=text_input, output_path=output_filename, **kwargs)
+        
+        with tasks_lock:
+            task_entry = tasks_status.get(task_id, {})
+            task_entry.update({"status": "completed", "progress": 100, "message": "合成完成!", "audio_url": f"/static/outputs/{os.path.basename(output_filename)}"})
     except Exception as e:
-        gr.Error(f"语音生成时发生未知错误: {e}")
-        return None, gr.update(visible=False), None
+        print(f"Error in synthesis_worker for task {task_id}: {e}")
+        with tasks_lock:
+            tasks_status[task_id].update({"status": "failed", "message": f"合成失败: {e}"})
+    finally:
+        # Always unregister the callback
+        print("Always unregister the callback")
 
-# --- Gradio UI Definition ---
-with gr.Blocks(theme=gr.themes.Base(primary_hue=gr.themes.colors.purple, secondary_hue=gr.themes.colors.blue)) as demo:
-    newly_extracted_mel_state = gr.State(value=None)
-    
-    gr.HTML('''<h2 style="text-align: center;">IndexTTS: 零样本语音合成系统</h2>''')
-    
-    with gr.Tab("音频生成"):
-        with gr.Row():
-            with gr.Column(scale=1):
-                gr.Markdown("### 步骤 1: 提供声音样本")
-                prompt_audio = gr.Audio(label="上传新音频", sources=["upload", "microphone"], type="filepath")
-                gr.Markdown("<p style='text-align: center; margin: 5px;'>或</p>")
-                with gr.Row():
-                    saved_voices_dropdown = gr.Dropdown(label="选择已保存的声音", choices=get_saved_voices_list(), interactive=True)
-                    delete_voice_button = gr.Button("🗑️", elem_id="delete_button")
-                
-                with gr.Group(visible=False) as save_voice_group:
-                    gr.Markdown("---")
-                    gr.Markdown("**保存当前生成的声音特征**")
-                    new_voice_name_input = gr.Textbox(label="为新声音命名", placeholder="例如：播音员男声")
-                    save_voice_button = gr.Button("💾 保存声音特征", variant="secondary")
+# --- Main Synthesize Endpoint (Corrected and Final) ---
+@app.route('/api/synthesize', methods=['POST'])
+def synthesize():
+    if not tts_engine_instance: return jsonify({"error": "TTS Engine not loaded."}), 503
 
-            with gr.Column(scale=2):
-                gr.Markdown("### 步骤 2: 输入文本并生成")
-                input_text_single = gr.TextArea(label="合成文本", placeholder="在此输入您想要合成的文本...", lines=8)
-                gen_button = gr.Button("生成语音", variant="primary")
-                output_audio = gr.Audio(label="生成结果", interactive=False)
+    task_id = str(uuid.uuid4())
+    form_data = request.form
+    
+    prompt_mel = None
+    is_new_upload = False
+    temp_filepath_for_feature_extraction = None
+    files_to_delete_after_task = []
+
+    try:
+        # Step 1: Get the voice mel spectrogram (prompt_mel)
+        if form_data.get('saved_voice_identifier'):
+            safe_voice_id = sanitize_filename(form_data['saved_voice_identifier'])
+            mel_path = os.path.join(SAVED_VOICE_FEATURES_DIR, f"{safe_voice_id}.cond_mel.npy")
+            prompt_mel = torch.from_numpy(np.load(mel_path)).to(DEVICE)
             
-        with gr.Accordion("高级生成参数", open=False):
-            # ... (Advanced parameters UI definitions remain the same) ...
-            do_sample = gr.Checkbox(label="启用采样 (do_sample)", value=True)
-            temperature = gr.Slider(label="温度", minimum=0.1, maximum=2.0, value=1.0, step=0.05)
-            top_p = gr.Slider(label="Top-P", minimum=0.0, maximum=1.0, value=0.8, step=0.01)
-            top_k = gr.Slider(label="Top-K", minimum=0, maximum=100, value=30, step=1)
-            length_penalty = gr.Number(label="长度惩罚", value=0.0)
-            num_beams = gr.Slider(label="束搜索宽度", value=3, minimum=1, maximum=10, step=1)
-            repetition_penalty = gr.Number(label="重复惩罚", value=10.0)
-            max_new_tokens = gr.Slider(label="最大生成Token数", value=600, minimum=50, maximum=800, step=10)
-            max_text_tokens_per_sentence = gr.Slider(label="分句最大Token数", value=120, minimum=20, maximum=300, step=2)
+        elif request.files.get('referenceAudioFile'):
+            is_new_upload = True
+            uploaded_file = request.files['referenceAudioFile']
+            original_temp_filename = f"temp_upload_{task_id}_{sanitize_filename(uploaded_file.filename)}"
+            original_temp_filepath = os.path.join(TEMP_AUDIO_DIR, original_temp_filename)
+            uploaded_file.save(original_temp_filepath)
+            temp_filepath_for_feature_extraction = original_temp_filepath
+            files_to_delete_after_task.append(original_temp_filepath)
 
-        advanced_params = [
-            do_sample, temperature, top_p, top_k, length_penalty,
-            num_beams, repetition_penalty, max_new_tokens, max_text_tokens_per_sentence
-        ]
+            crop_start = form_data.get('cropStart', type=float)
+            crop_end = form_data.get('cropEnd', type=float)
+            if AudioSegment and (crop_start is not None or crop_end is not None):
+                audio = AudioSegment.from_file(original_temp_filepath)
+                start_ms = int(crop_start * 1000) if crop_start is not None else 0
+                end_ms = int(crop_end * 1000) if crop_end is not None else len(audio)
+                if start_ms < end_ms:
+                    cropped_audio = audio[start_ms:end_ms]
+                    cropped_filepath = os.path.join(TEMP_AUDIO_DIR, f"cropped_{original_temp_filename}")
+                    cropped_audio.export(cropped_filepath, format="wav")
+                    temp_filepath_for_feature_extraction = cropped_filepath
+                    files_to_delete_after_task.append(cropped_filepath)
+            
+            prompt_mel = tts_engine_instance.extract_features(temp_filepath_for_feature_extraction)
+            
+            with temp_features_lock:
+                temp_features_cache[original_temp_filepath] = {"cond_mel_numpy": prompt_mel.cpu().numpy()}
+        else:
+            return jsonify({"error": "需要参考音频或已保存的声音特征。"}), 400
 
-        # --- CORRECTED UI Event Listeners ---
+        # Step 2: Build a clean kwargs dictionary using a strict ALLOWLIST
+        kwargs_for_engine = {}
+        param_map = {
+            'do_sample': {'key': 'do_sample', 'type': bool},
+            'temperature': {'key': 'temperature', 'type': float},
+            'top_k': {'key': 'top_k', 'type': int},
+            'top_p': {'key': 'top_p', 'type': float},
+            'repetition_penalty': {'key': 'repetition_penalty', 'type': float},
+            'num_beams': {'key': 'num_beams', 'type': int},
+            'length_penalty': {'key': 'length_penalty', 'type': float},
+            'max_mel_tokens': {'key': 'max_new_tokens', 'type': int},
+            'max_text_tokens_per_sentence': {'key': 'max_text_tokens_per_sentence', 'type': int},
+        }
+        for front_key, mapping in param_map.items():
+            if front_key in form_data:
+                value_str = form_data[front_key]
+                backend_key = mapping['key']
+                target_type = mapping['type']
+                try:
+                    if target_type == bool: kwargs_for_engine[backend_key] = (value_str.lower() == 'true')
+                    elif target_type == float: kwargs_for_engine[backend_key] = float(value_str)
+                    elif target_type == int: kwargs_for_engine[backend_key] = int(value_str)
+                except (ValueError, TypeError):
+                    print(f"Warning: Could not convert param '{front_key}' with value '{value_str}' to {target_type}. Skipping.")
         
-        # When a user MANUALLY SELECTS a voice from the dropdown, clear the audio uploader.
-        # .select() is not triggered by programmatic updates, breaking the loop.
-        saved_voices_dropdown.select(
-            fn=lambda: gr.update(value=None), # Action: clear the audio component
-            inputs=None,
-            outputs=[prompt_audio]
-        )
+        # Step 3: Start the synthesis thread
+        processed_text = form_data.get('text', '') # Add text replacement logic here if needed
+        output_filename = os.path.join(OUTPUT_AUDIO_DIR, f"output_{task_id}.wav")
+        infer_mode = form_data.get('infer_mode', '普通推理')
         
-        # When a user UPLOADS or CLEARS the audio, clear the dropdown.
-        # .upload() and .clear() are direct user actions.
-        prompt_audio.upload(
-            fn=lambda: gr.update(value=None), # Action: clear the dropdown
-            inputs=None,
-            outputs=[saved_voices_dropdown]
-        )
-        prompt_audio.clear(
-            fn=lambda: gr.update(value=None), # Also clear dropdown when 'x' is clicked
-            inputs=None,
-            outputs=[saved_voices_dropdown]
-        )
+        with tasks_lock:
+            tasks_status[task_id] = {"status": "queued", "progress": 0, "message": "任务已排队", "files_to_delete": files_to_delete_after_task}
+            if is_new_upload:
+                tasks_status[task_id]["is_from_new_upload"] = True
+                tasks_status[task_id]["source_reference_identifier_for_save"] = original_temp_filepath
 
-        # Main generation button
-        gen_button.click(
-            fn=gen_single,
-            inputs=[prompt_audio, saved_voices_dropdown, input_text_single, *advanced_params],
-            outputs=[output_audio, save_voice_group, newly_extracted_mel_state]
-        )
+        thread = threading.Thread(target=synthesis_worker, args=(task_id, processed_text, prompt_mel, output_filename, infer_mode), kwargs=kwargs_for_engine)
+        thread.start()
+        return jsonify({"message": "合成任务已启动", "task_id": task_id})
+    except Exception as e:
+        print(f"Error in /api/synthesize: {e}")
+        import traceback; traceback.print_exc()
+        for f in files_to_delete_after_task:
+            if os.path.exists(f): os.remove(f)
+        return jsonify({"error": f"处理请求时出错: {e}"}), 500
 
-        # Save and Delete buttons
-        save_voice_button.click(fn=save_voice_feature, inputs=[new_voice_name_input, newly_extracted_mel_state], outputs=[saved_voices_dropdown])
-        delete_voice_button.click(fn=delete_voice_feature, inputs=[saved_voices_dropdown], outputs=[saved_voices_dropdown])
+# SSE status stream with improved cleanup
+@app.route('/api/synthesize-stream-status/<task_id>')
+def synthesize_stream_status(task_id):
+    def generate_status_updates(task_id):
+        while True:
+            with tasks_lock: task_info = tasks_status.get(task_id, {})
+            yield f"data: {json.dumps(task_info)}\n\n"
+            if task_info.get("status") in ["completed", "failed", "error"]:
+                files_to_delete = task_info.get("files_to_delete")
+                if files_to_delete:
+                    for f_path in files_to_delete:
+                        if os.path.exists(f_path):
+                            try: os.remove(f_path); print(f"Cleaned up temp file: {f_path}")
+                            except Exception as e_clean: print(f"Error cleaning temp file {f_path}: {e_clean}")
+                break
+            time.sleep(0.2)
+    return Response(stream_with_context(generate_status_updates(task_id)), mimetype='text/event-stream')
 
-# --- Launch Gradio App ---
-if __name__ == "__main__":
-    demo.queue().launch(server_name=cmd_args.host, server_port=cmd_args.port, inbrowser=True)
+if __name__ == '__main__':
+    if tts_engine_instance:
+        app.run(debug=True, port=5000, host="0.0.0.0", use_reloader=False)

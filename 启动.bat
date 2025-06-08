@@ -2,8 +2,12 @@
 chcp 65001 >nul
 
 REM === 主程序 ===
-REM 获取当前脚本所在目录（项目根目录）
+
 set "ROOT_DIR=%~dp0"
+
+
+REM !!!!!下面是设置Python目录（Anaconda安装目录下面的envs文件夹中的某个文件夹）
+
 set "PYTHON=%ROOT_DIR%python\python.exe"
 
 REM 设置启动参数

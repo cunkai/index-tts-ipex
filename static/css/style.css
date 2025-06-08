@@ -1,23 +1,21 @@
 /* static/css/style.css */
-/* (与上一个完整 script.js 对应的 style.css 版本相同) */
-/* (确保包含了 .ruleset-management 和 .synthesis-buttons-container 的样式) */
 body {font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px 0; background-color: #f4f7f6; color: #333; display: flex; justify-content: center;}
 .container {width: 90%; max-width: 900px; background-color: #ffffff; border-radius: 12px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1); overflow: hidden;}
 header {background-color: #2c3e50; color: #ecf0f1; padding: 25px 30px; text-align: center; border-bottom: 4px solid #3498db;}
 header h1 {margin: 0; font-size: 2em; font-weight: 300;}
 main {padding: 25px 30px;}
+.panel {background-color: #fff; margin-bottom: 25px; padding: 20px; border-radius: 8px; border: 1px solid #e0e0e0; box-shadow: 0 2px 5px rgba(0,0,0,0.05);}
 .panel h2 {margin-top: 0; color: #34495e; font-size: 1.5em; border-bottom: 2px solid #ecf0f1; padding-bottom: 10px; margin-bottom: 15px;}
 textarea, select, input[type="text"], input[type="number"] {width: calc(100% - 22px); padding: 12px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 1em; box-sizing: border-box; transition: border-color 0.3s ease;}
 textarea:focus, select:focus, input[type="text"]:focus, input[type="number"]:focus {border-color: #3498db; outline: none; box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);}
 textarea {resize: vertical;}
 .button, .button-primary, .button-small {display: inline-block; padding: 10px 20px; font-size: 1em; font-weight: bold; color: #fff; background-color: #3498db; border: none; border-radius: 6px; cursor: pointer; text-align: center; text-decoration: none; transition: background-color 0.3s ease, transform 0.1s ease;}
 .button:hover, .button-primary:hover, .button-small:hover {background-color: #2980b9; transform: translateY(-1px);}
-.button:active, .button-primary:active, .button-small:active {transform: translateY(0px);}
 .button-primary {background-color: #2ecc71; padding: 12px 25px; font-size: 1.1em;}
 .button-primary:hover {background-color: #27ae60;}
 .button-small {padding: 6px 12px; font-size: 0.9em; margin-right: 5px; margin-bottom: 5px;}
 .audio-controls {display: flex; flex-wrap: wrap; gap: 20px; align-items: center; margin-bottom: 15px;}
-.upload-section, .history-section {flex: 1; min-width: 200px;}
+.upload-section {flex: 1; min-width: 200px;}
 #uploaded-ref-filename {font-style: italic; color: #555; margin-left: 10px;}
 #waveform-container {width: 100%; height: 100px; background-color: #f0f0f0; border: 1px solid #ddd; border-radius: 4px; position: relative; margin-bottom:10px;}
 .wavesurfer-region {background-color: rgba(52, 152, 219, 0.3) !important; z-index: 2 !important;}
@@ -31,24 +29,10 @@ textarea {resize: vertical;}
 .collapsible-content {max-height: 0; overflow: hidden; transition: max-height 0.4s ease-out, padding 0.4s ease-out; padding-left: 10px; padding-right: 10px;}
 .collapsible.open .collapsible-content {max-height: 1000px; padding-top: 15px; padding-bottom: 15px;}
 .collapsible.open .collapsible-trigger .arrow {transform: rotate(180deg);}
-.ruleset-management {
-    display: flex;
-    align-items: center;
-    gap: 10px; /* Provides spacing between label, select, and button */
-    margin-bottom: 15px;
-    flex-wrap: wrap; /* Allow wrapping on small screens */
-}
-.ruleset-management label {
-    font-weight: 500;
-    white-space: nowrap; /* Prevent label from wrapping if possible */
-}
-.ruleset-management select {
-    flex-grow: 1; /* Select takes available space */
-    min-width: 180px; /* Adjust as needed */
-}
-.ruleset-management .button-small { /* Edit button */
-    flex-shrink: 0; /* Prevent button from shrinking */
-}
+.ruleset-management {display: flex; align-items: center; gap: 10px; margin-bottom: 15px; flex-wrap: wrap;}
+.ruleset-management label {font-weight: 500; white-space: nowrap;}
+.ruleset-management select {flex-grow: 1; min-width: 180px;}
+.ruleset-management .button-small {flex-shrink: 0;}
 .ruleset-divider {border: none; border-top: 1px dashed #ddd; margin: 15px 0;}
 .replacement-rule {display: flex; gap: 10px; margin-bottom: 10px; align-items: center;}
 .replacement-rule input {flex: 1; margin-bottom: 0;}
@@ -56,186 +40,23 @@ textarea {resize: vertical;}
 .replacement-rule .remove-rule-button:hover {background-color: #c0392b;}
 .preview-section {margin-top: 15px;} .preview-box {min-height: 60px; padding: 10px; border: 1px solid #ddd; border-radius: 4px; background-color: #f9f9f9; white-space: pre-wrap; word-wrap: break-word;}
 .synthesis-buttons-container {display: flex; gap: 15px; justify-content: center; flex-wrap: wrap;}
-.synthesis-buttons-container .button-primary {flex-grow: 1; min-width: 150px;}
-.status {margin-top: 15px; padding: 10px; border-radius: 4px; display: none;}
+.status {margin-top: 15px; padding: 10px; border-radius: 4px; display: none; text-align: center;}
 .status.success {background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; display: block;}
 .status.error {background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; display: block;}
 .status.info {background-color: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; display: block;}
-.status.warning {background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba; display: block;}
 #output-audio-player {width: 100%; margin-top: 10px; margin-bottom: 10px;}
 #download-audio-link {margin-top: 10px;}
-footer {text-align: center; padding: 20px 30px; font-size: 0.9em; color: #7f8c8d; background-color: #ecf0f1; border-top: 1px solid #dde1e2;}
-.advanced-settings-panel .collapsible-content {
-    display: flex;
-    flex-direction: column;
-}
-#advanced-settings-form {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); /* Responsive columns */
-    gap: 15px;
-}
-.adv-setting-item {
-    display: flex;
-    flex-direction: column; /* Label above input */
-    gap: 5px;
-    padding: 10px;
-    background-color: #f9f9f9;
-    border-radius: 4px;
-    border: 1px solid #efefef;
-}
-.adv-setting-item label {
-    font-weight: 500;
-    font-size: 0.9em;
-    color: #555;
-}
-.adv-setting-item input[type="range"] + span { /* Style for range value display */
-    font-size: 0.9em;
-    color: #333;
-    margin-left: 5px;
-}
-.adv-setting-item input[type="checkbox"] {
-    align-self: flex-start; /* Align checkbox to the start */
-    margin-top: 5px;
-}
-
-/* Styles for the new ruleset editor panel */
-#ruleset-editor-panel {
-    border-top: 4px solid #3498db; /* Highlight it a bit */
-}
-
-#ruleset-editor-panel h2 { /* Keep consistent with other panel titles */
-    margin-top: 0;
-    color: #34495e;
-    font-size: 1.5em;
-    border-bottom: 2px solid #ecf0f1;
-    padding-bottom: 10px;
-    margin-bottom: 15px;
-}
-
-#ruleset-editor-panel input[type="text"] { /* Ensure it takes full width */
-    width: calc(100% - 22px); /* Adjust if padding/border is different */
-}
-
-.ruleset-editor-actions button {
-    flex-grow: 1; /* Make buttons distribute space */
-    min-width: 120px; /* Ensure buttons don't get too small */
-}
-
-/* Styles for the new ruleset editor panel - AS A MODAL-LIKE OVERLAY */
-#ruleset-editor-panel {
-    position: fixed; /* Key change for overlay behavior */
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%); /* Center it */
-    width: 90%; /* Or a fixed width like 600px */
-    max-width: 700px; /* Max width for larger screens */
-    max-height: 80vh; /* Max height to prevent overflow on smaller screens */
-    overflow-y: auto; /* Allow scrolling within the panel if content is too long */
-    background-color: #ffffff;
-    border: 1px solid #ccc;
-    border-radius: 12px;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2); /* More prominent shadow for modal */
-    z-index: 1000; /* Ensure it's on top of other content */
-    padding: 25px 30px; /* Keep consistent padding */
-    /* border-top: 4px solid #3498db; /* Removed, using box-shadow primarily */
-}
-
-/* Optional: Backdrop for the modal */
-#ruleset-editor-backdrop {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(0, 0, 0, 0.5); /* Semi-transparent black */
-    z-index: 999; /* Below the editor panel, above other content */
-    display: none; /* Initially hidden */
-}
-
-
-#ruleset-editor-panel h2 { 
-    margin-top: 0;
-    color: #34495e;
-    font-size: 1.5em;
-    border-bottom: 2px solid #ecf0f1;
-    padding-bottom: 10px;
-    margin-bottom: 20px; /* Increased margin */
-}
-
-#ruleset-editor-panel input[type="text"]#ruleset-name-input { /* Specific to name input if needed */
-    width: calc(100% - 22px); 
-}
-
-/* Ensure rule inputs within editor also behave well */
-#editor-replacement-rules-container .replacement-rule input[type="text"] {
-    margin-bottom: 0; /* Already set in global styles, but confirm */
-}
-
-
-.ruleset-editor-actions {
-    display: flex;
-    justify-content: space-between; /* Keep buttons spread */
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-top: 20px; /* Add some space above buttons */
-}
-
-.ruleset-editor-actions button {
-    flex-grow: 0; /* Don't let them grow too much, rely on padding */
-    /* min-width: 120px; /* Already set */
-}
-
-/* Ensure other panel styles don't conflict too much */
-.panel {
-    background-color: #fff;
-    margin-bottom: 25px;
-    padding: 20px; /* This padding is for normal panels, editor has its own */
-    border-radius: 8px;
-    border: 1px solid #e0e0e0;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-}
-
-.ruleset-management { /* Now just for the "Create New" button */
-    margin-bottom: 10px;
-}
-
-#ruleset-list-container {
-    border: 1px solid #ddd; /* Softer border */
-    border-radius: 6px;
-    padding: 10px;
-    background-color: #f9f9f9;
-}
-
-.ruleset-list-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 8px 10px;
-    border-bottom: 1px solid #eee;
-    cursor: pointer; /* Indicates the name is clickable */
-    transition: background-color 0.2s ease;
-}
-
-.ruleset-list-item:last-child {
-    border-bottom: none;
-}
-
-.ruleset-list-item:hover {
-    background-color: #e9ecef;
-}
-
-.ruleset-list-item.selected-ruleset { /* Style for the currently applied ruleset */
-    background-color: #d1ecf1; /* Light blue, similar to info status */
-    font-weight: 500;
-}
-
-.ruleset-list-item .ruleset-name-display {
-    flex-grow: 1;
-    margin-right: 10px;
-}
-
-.ruleset-list-item .edit-ruleset-in-list-btn {
-    flex-shrink: 0;
-    padding: 4px 8px; /* Make edit button a bit smaller */
-    font-size: 0.85em;
-}
+#advanced-settings-form {display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px;}
+.adv-setting-item {display: flex; flex-direction: column; gap: 5px; padding: 10px; background-color: #f9f9f9; border-radius: 4px; border: 1px solid #efefef;}
+.adv-setting-item label {font-weight: 500; font-size: 0.9em; color: #555;}
+#ruleset-editor-backdrop {position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5); z-index: 999; display: none;}
+#ruleset-editor-panel {position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 90%; max-width: 700px; max-height: 80vh; overflow-y: auto; background-color: #ffffff; border-radius: 12px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2); z-index: 1000; padding: 25px 30px; display: none;}
+#ruleset-editor-panel h2 {margin-top: 0; color: #34495e; font-size: 1.5em; border-bottom: 2px solid #ecf0f1; padding-bottom: 10px; margin-bottom: 20px;}
+#ruleset-editor-panel input[type="text"] {width: calc(100% - 22px);}
+.ruleset-editor-actions {display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-top: 20px;}
+#ruleset-list-container {border: 1px solid #ddd; border-radius: 6px; padding: 10px; background-color: #f9f9f9;}
+.ruleset-list-item {display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; border-bottom: 1px solid #eee; cursor: pointer; transition: background-color 0.2s ease;}
+.ruleset-list-item:last-child {border-bottom: none;}
+.ruleset-list-item:hover {background-color: #e9ecef;}
+.ruleset-list-item.selected-ruleset {background-color: #d1ecf1; font-weight: 500;}
+.ruleset-list-item .ruleset-name-display {flex-grow: 1; margin-right: 10px;}
