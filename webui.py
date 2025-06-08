@@ -1,212 +1,229 @@
+# FILE: webui.py (Corrected Event Logic and Full Features)
 import json
 import os
 import sys
 import threading
 import time
+import re
+import gradio as gr
+import torch
+import numpy as np
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
+# --- 全局路径和配置 ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
-sys.path.append(os.path.join(current_dir, "indextts"))
 
+# --- Argument Parsing ---
 import argparse
-parser = argparse.ArgumentParser(description="IndexTTS WebUI")
-parser.add_argument("--verbose", action="store_true", default=False, help="Enable verbose mode")
-parser.add_argument("--port", type=int, default=7860, help="Port to run the web UI on")
-parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to run the web UI on")
-parser.add_argument("--model_dir", type=str, default="checkpoints", help="Model checkpoints directory")
+parser = argparse.ArgumentParser(description="IndexTTS 中文 WebUI")
+parser.add_argument("--port", type=int, default=7860, help="Web UI 运行端口")
+parser.add_argument("--host", type=str, default="127.0.0.1", help="Web UI 运行主机地址")
+parser.add_argument("--model_dir", type=str, default="checkpoints", help="模型检查点目录")
 cmd_args = parser.parse_args()
 
-if not os.path.exists(cmd_args.model_dir):
-    print(f"Model directory {cmd_args.model_dir} does not exist. Please download the model first.")
+# --- Model Loading (using the modified IndexTTS class) ---
+model_dir_abs = os.path.join(current_dir, cmd_args.model_dir)
+try:
+    from indextts.infer import IndexTTS
+    tts = IndexTTS(model_dir=model_dir_abs, cfg_path=os.path.join(model_dir_abs, "config.yaml"))
+    print("成功加载修改后的 IndexTTS 引擎。")
+    DEVICE = tts.device
+except Exception as e:
+    print(f"致命错误：无法从 {model_dir_abs} 加载TTS模型。错误: {e}")
     sys.exit(1)
 
-for file in [
-    "bigvgan_generator.pth",
-    "bpe.model",
-    "gpt.pth",
-    "config.yaml",
-]:
-    file_path = os.path.join(cmd_args.model_dir, file)
-    if not os.path.exists(file_path):
-        print(f"Required file {file_path} does not exist. Please download it.")
-        sys.exit(1)
+# --- 声音特征文件管理 ---
+SAVED_VOICE_FEATURES_DIR = os.path.join(current_dir, "saved_voice_features")
+os.makedirs(SAVED_VOICE_FEATURES_DIR, exist_ok=True)
+os.makedirs(os.path.join(current_dir, "outputs"), exist_ok=True)
 
-import gradio as gr
+def sanitize_filename(name):
+    return re.sub(r'[^\w\s.-]', '', str(name)).strip()
 
-from indextts.infer import IndexTTS
-from tools.i18n.i18n import I18nAuto
+def get_saved_voices_list():
+    if not os.path.exists(SAVED_VOICE_FEATURES_DIR): return []
+    return sorted([f.replace(".cond_mel.npy", "") for f in os.listdir(SAVED_VOICE_FEATURES_DIR) if f.endswith(".cond_mel.npy")])
 
-i18n = I18nAuto(language="zh_CN")
-MODE = 'local'
-tts = IndexTTS(model_dir=cmd_args.model_dir, cfg_path=os.path.join(cmd_args.model_dir, "config.yaml"),)
+# --- UI辅助函数 ---
 
+def save_voice_feature(new_name, mel_to_save):
+    if not new_name or not new_name.strip():
+        gr.Warning("请输入一个有效的名称来保存声音特征。")
+        return gr.update()
+    if mel_to_save is None:
+        gr.Warning("没有可以保存的活动声音特征。请先从新音频生成。")
+        return gr.update()
 
-os.makedirs("outputs/tasks",exist_ok=True)
-os.makedirs("prompts",exist_ok=True)
+    safe_name = sanitize_filename(new_name)
+    save_path = os.path.join(SAVED_VOICE_FEATURES_DIR, f"{safe_name}.cond_mel.npy")
+    
+    try:
+        np.save(save_path, mel_to_save.cpu().numpy())
+        gr.Info(f"声音特征 '{safe_name}' 已成功保存！")
+        return gr.update(choices=get_saved_voices_list(), value=safe_name)
+    except Exception as e:
+        gr.Error(f"保存失败: {e}")
+        return gr.update()
 
-with open("tests/cases.jsonl", "r", encoding="utf-8") as f:
-    example_cases = []
-    for line in f:
-        line = line.strip()
-        if not line:
-            continue
-        example = json.loads(line)
-        example_cases.append([os.path.join("tests", example.get("prompt_audio", "sample_prompt.wav")),
-                              example.get("text"), ["普通推理", "批次推理"][example.get("infer_mode", 0)]])
+def delete_voice_feature(voice_name):
+    if not voice_name:
+        gr.Warning("请先从下拉菜单中选择一个要删除的声音。")
+        return gr.update()
 
-def gen_single(prompt, text, infer_mode, max_text_tokens_per_sentence=120, sentences_bucket_max_size=4,
-                *args, progress=gr.Progress()):
-    output_path = None
-    if not output_path:
-        output_path = os.path.join("outputs", f"spk_{int(time.time())}.wav")
-    # set gradio progress
-    tts.gr_progress = progress
-    do_sample, top_p, top_k, temperature, \
-        length_penalty, num_beams, repetition_penalty, max_mel_tokens = args
-    kwargs = {
-        "do_sample": bool(do_sample),
-        "top_p": float(top_p),
-        "top_k": int(top_k) if int(top_k) > 0 else None,
-        "temperature": float(temperature),
-        "length_penalty": float(length_penalty),
-        "num_beams": num_beams,
-        "repetition_penalty": float(repetition_penalty),
-        "max_mel_tokens": int(max_mel_tokens),
-        # "typical_sampling": bool(typical_sampling),
-        # "typical_mass": float(typical_mass),
-    }
-    if infer_mode == "普通推理":
-        output = tts.infer(prompt, text, output_path, verbose=cmd_args.verbose,
-                           max_text_tokens_per_sentence=int(max_text_tokens_per_sentence),
-                           **kwargs)
+    file_path = os.path.join(SAVED_VOICE_FEATURES_DIR, f"{voice_name}.cond_mel.npy")
+    if os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+            gr.Info(f"声音 '{voice_name}' 已删除。")
+            return gr.update(choices=get_saved_voices_list(), value=None)
+        except Exception as e:
+            gr.Error(f"删除失败: {e}")
+            return gr.update()
     else:
-        # 批次推理
-        output = tts.infer_fast(prompt, text, output_path, verbose=cmd_args.verbose,
-            max_text_tokens_per_sentence=int(max_text_tokens_per_sentence),
-            sentences_bucket_max_size=(sentences_bucket_max_size),
-            **kwargs)
-    return gr.update(value=output,visible=True)
+        gr.Warning("未找到要删除的文件。")
+        return gr.update(choices=get_saved_voices_list())
 
-def update_prompt_audio():
-    update_button = gr.update(interactive=True)
-    return update_button
+def gen_single(uploaded_audio_path, saved_voice_name, text, *args, progress=gr.Progress(track_tqdm=True)):
+    prompt_mel = None
+    is_from_new_upload = False
+    
+    # 1. 决定声音来源并提取/加载特征
+    if saved_voice_name:
+        gr.Info(f"加载已保存的声音: {saved_voice_name}...")
+        try:
+            mel_path = os.path.join(SAVED_VOICE_FEATURES_DIR, f"{saved_voice_name}.cond_mel.npy")
+            prompt_mel = torch.from_numpy(np.load(mel_path)).to(DEVICE)
+        except Exception as e:
+            gr.Error(f"加载声音特征 '{saved_voice_name}' 失败: {e}")
+            return None, gr.update(visible=False), None
+            
+    elif uploaded_audio_path:
+        gr.Info(f"从上传的文件中提取声音特征...")
+        try:
+            prompt_mel = tts.extract_features(uploaded_audio_path)
+            is_from_new_upload = True
+        except Exception as e:
+            gr.Error(f"从音频中提取特征失败: {e}")
+            return None, gr.update(visible=False), None
+    else:
+        gr.Warning("错误：请先上传一个新音频，或选择一个已保存的声音。")
+        return None, gr.update(visible=False), None
+        
+    # 2. 验证文本输入
+    if not text or not text.strip():
+        gr.Warning("错误：文本输入不能为空。")
+        return None, gr.update(visible=False if not is_from_new_upload else True), prompt_mel if is_from_new_upload else None
 
-with gr.Blocks(title="IndexTTS Demo") as demo:
-    mutex = threading.Lock()
-    gr.HTML('''
-    <h2><center>IndexTTS: An Industrial-Level Controllable and Efficient Zero-Shot Text-To-Speech System</h2>
-    <h2><center>(一款工业级可控且高效的零样本文本转语音系统)</h2>
-<p align="center">
-<a href='https://arxiv.org/abs/2502.05512'><img src='https://img.shields.io/badge/ArXiv-2502.05512-red'></a>
-</p>
-    ''')
+    # 3. 准备参数并生成
+    output_audio_path = os.path.join(current_dir, "outputs", f"gen_{int(time.time())}.wav")
+    do_sample, temp, top_p, top_k, len_penalty, num_beams, rep_penalty, max_new, max_text_per_sent = args
+    kwargs = {
+        "do_sample": bool(do_sample), "temperature": float(temp), "top_p": float(top_p),
+        "top_k": int(top_k) if int(top_k) > 0 else None, "length_penalty": float(len_penalty),
+        "num_beams": int(num_beams), "repetition_penalty": float(rep_penalty), "max_new_tokens": int(max_new)
+    }
+
+    try:
+        gr.Info("语音生成中，请稍候...")
+        generated_audio_path = tts.infer(
+            prompt_mel, text, output_audio_path,
+            max_text_tokens_per_sentence=int(max_text_per_sent), **kwargs
+        )
+        gr.Info("语音生成成功！")
+        
+        # 4. 根据来源决定是否显示保存按钮
+        if is_from_new_upload:
+            return gr.update(value=generated_audio_path), gr.update(visible=True), prompt_mel
+        else:
+            return gr.update(value=generated_audio_path), gr.update(visible=False), None
+
+    except Exception as e:
+        gr.Error(f"语音生成时发生未知错误: {e}")
+        return None, gr.update(visible=False), None
+
+# --- Gradio UI Definition ---
+with gr.Blocks(theme=gr.themes.Base(primary_hue=gr.themes.colors.purple, secondary_hue=gr.themes.colors.blue)) as demo:
+    newly_extracted_mel_state = gr.State(value=None)
+    
+    gr.HTML('''<h2 style="text-align: center;">IndexTTS: 零样本语音合成系统</h2>''')
+    
     with gr.Tab("音频生成"):
         with gr.Row():
-            os.makedirs("prompts",exist_ok=True)
-            prompt_audio = gr.Audio(label="参考音频",key="prompt_audio",
-                                    sources=["upload","microphone"],type="filepath")
-            prompt_list = os.listdir("prompts")
-            default = ''
-            if prompt_list:
-                default = prompt_list[0]
-            with gr.Column():
-                input_text_single = gr.TextArea(label="文本",key="input_text_single", placeholder="请输入目标文本或拼音", info="当前模型版本{}".format(tts.model_version or "1.0"))
-                infer_mode = gr.Radio(choices=["普通推理", "批次推理"], label="推理模式",info="批次推理：更适合长句，性能翻倍",value="普通推理")        
-                gen_button = gr.Button("生成语音", key="gen_button",interactive=True)
-            output_audio = gr.Audio(label="生成结果", visible=True,key="output_audio")
-        with gr.Accordion("高级生成参数设置", open=False):
-            with gr.Row():
-                with gr.Column(scale=1):
-                    gr.Markdown("**GPT2 采样设置** _参数会影响音频多样性和生成速度详见[Generation strategies](https://huggingface.co/docs/transformers/main/en/generation_strategies)_")
-                    with gr.Row():
-                        do_sample = gr.Checkbox(label="do_sample", value=True, info="是否进行采样")
-                        temperature = gr.Slider(label="temperature", minimum=0.1, maximum=2.0, value=1.0, step=0.1)
-                    with gr.Row():
-                        top_p = gr.Slider(label="top_p", minimum=0.0, maximum=1.0, value=0.8, step=0.01)
-                        top_k = gr.Slider(label="top_k", minimum=0, maximum=100, value=30, step=1)
-                        num_beams = gr.Slider(label="num_beams", value=3, minimum=1, maximum=10, step=1)
-                    with gr.Row():
-                        repetition_penalty = gr.Number(label="repetition_penalty", precision=None, value=10.0, minimum=0.1, maximum=20.0, step=0.1)
-                        length_penalty = gr.Number(label="length_penalty", precision=None, value=0.0, minimum=-2.0, maximum=2.0, step=0.1)
-                    max_mel_tokens = gr.Slider(label="max_mel_tokens", value=600, minimum=50, maximum=tts.cfg.gpt.max_mel_tokens, step=10, info="生成Token最大数量，过小导致音频被截断", key="max_mel_tokens")
-                    # with gr.Row():
-                    #     typical_sampling = gr.Checkbox(label="typical_sampling", value=False, info="不建议使用")
-                    #     typical_mass = gr.Slider(label="typical_mass", value=0.9, minimum=0.0, maximum=1.0, step=0.1)
-                with gr.Column(scale=2):
-                    gr.Markdown("**分句设置** _参数会影响音频质量和生成速度_")
-                    with gr.Row():
-                        max_text_tokens_per_sentence = gr.Slider(
-                            label="分句最大Token数", value=120, minimum=20, maximum=tts.cfg.gpt.max_text_tokens, step=2, key="max_text_tokens_per_sentence",
-                            info="建议80~200之间，值越大，分句越长；值越小，分句越碎；过小过大都可能导致音频质量不高",
-                        )
-                        sentences_bucket_max_size = gr.Slider(
-                            label="分句分桶的最大容量（批次推理生效）", value=4, minimum=1, maximum=16, step=1, key="sentences_bucket_max_size",
-                            info="建议2-8之间，值越大，一批次推理包含的分句数越多，过大可能导致内存溢出",
-                        )
-                    with gr.Accordion("预览分句结果", open=True) as sentences_settings:
-                        sentences_preview = gr.Dataframe(
-                            headers=["序号", "分句内容", "Token数"],
-                            key="sentences_preview",
-                            wrap=True,
-                        )
-            advanced_params = [
-                do_sample, top_p, top_k, temperature,
-                length_penalty, num_beams, repetition_penalty, max_mel_tokens,
-                # typical_sampling, typical_mass,
-            ]
-        
-        if len(example_cases) > 0:
-            gr.Examples(
-                examples=example_cases,
-                inputs=[prompt_audio, input_text_single, infer_mode],
-            )
+            with gr.Column(scale=1):
+                gr.Markdown("### 步骤 1: 提供声音样本")
+                prompt_audio = gr.Audio(label="上传新音频", sources=["upload", "microphone"], type="filepath")
+                gr.Markdown("<p style='text-align: center; margin: 5px;'>或</p>")
+                with gr.Row():
+                    saved_voices_dropdown = gr.Dropdown(label="选择已保存的声音", choices=get_saved_voices_list(), interactive=True)
+                    delete_voice_button = gr.Button("🗑️", elem_id="delete_button")
+                
+                with gr.Group(visible=False) as save_voice_group:
+                    gr.Markdown("---")
+                    gr.Markdown("**保存当前生成的声音特征**")
+                    new_voice_name_input = gr.Textbox(label="为新声音命名", placeholder="例如：播音员男声")
+                    save_voice_button = gr.Button("💾 保存声音特征", variant="secondary")
 
-    def on_input_text_change(text, max_tokens_per_sentence):
-        if text and len(text) > 0:
-            text_tokens_list = tts.tokenizer.tokenize(text)
-
-            sentences = tts.tokenizer.split_sentences(text_tokens_list, max_tokens_per_sentence=int(max_tokens_per_sentence))
-            data = []
-            for i, s in enumerate(sentences):
-                sentence_str = ''.join(s)
-                tokens_count = len(s)
-                data.append([i, sentence_str, tokens_count])
+            with gr.Column(scale=2):
+                gr.Markdown("### 步骤 2: 输入文本并生成")
+                input_text_single = gr.TextArea(label="合成文本", placeholder="在此输入您想要合成的文本...", lines=8)
+                gen_button = gr.Button("生成语音", variant="primary")
+                output_audio = gr.Audio(label="生成结果", interactive=False)
             
-            return {
-                sentences_preview: gr.update(value=data, visible=True, type="array"),
-            }
-        else:
-            df = gr.DataFrame([], columns=["序号", "分句内容", "Token数"])
-            return {
-                sentences_preview: gr.update(value=df)
-            }
+        with gr.Accordion("高级生成参数", open=False):
+            # ... (Advanced parameters UI definitions remain the same) ...
+            do_sample = gr.Checkbox(label="启用采样 (do_sample)", value=True)
+            temperature = gr.Slider(label="温度", minimum=0.1, maximum=2.0, value=1.0, step=0.05)
+            top_p = gr.Slider(label="Top-P", minimum=0.0, maximum=1.0, value=0.8, step=0.01)
+            top_k = gr.Slider(label="Top-K", minimum=0, maximum=100, value=30, step=1)
+            length_penalty = gr.Number(label="长度惩罚", value=0.0)
+            num_beams = gr.Slider(label="束搜索宽度", value=3, minimum=1, maximum=10, step=1)
+            repetition_penalty = gr.Number(label="重复惩罚", value=10.0)
+            max_new_tokens = gr.Slider(label="最大生成Token数", value=600, minimum=50, maximum=800, step=10)
+            max_text_tokens_per_sentence = gr.Slider(label="分句最大Token数", value=120, minimum=20, maximum=300, step=2)
 
-    input_text_single.change(
-        on_input_text_change,
-        inputs=[input_text_single, max_text_tokens_per_sentence],
-        outputs=[sentences_preview]
-    )
-    max_text_tokens_per_sentence.change(
-        on_input_text_change,
-        inputs=[input_text_single, max_text_tokens_per_sentence],
-        outputs=[sentences_preview]
-    )
-    prompt_audio.upload(update_prompt_audio,
-                         inputs=[],
-                         outputs=[gen_button])
+        advanced_params = [
+            do_sample, temperature, top_p, top_k, length_penalty,
+            num_beams, repetition_penalty, max_new_tokens, max_text_tokens_per_sentence
+        ]
 
-    gen_button.click(gen_single,
-                     inputs=[prompt_audio, input_text_single, infer_mode,
-                             max_text_tokens_per_sentence, sentences_bucket_max_size,
-                             *advanced_params,
-                     ],
-                     outputs=[output_audio])
+        # --- CORRECTED UI Event Listeners ---
+        
+        # When a user MANUALLY SELECTS a voice from the dropdown, clear the audio uploader.
+        # .select() is not triggered by programmatic updates, breaking the loop.
+        saved_voices_dropdown.select(
+            fn=lambda: gr.update(value=None), # Action: clear the audio component
+            inputs=None,
+            outputs=[prompt_audio]
+        )
+        
+        # When a user UPLOADS or CLEARS the audio, clear the dropdown.
+        # .upload() and .clear() are direct user actions.
+        prompt_audio.upload(
+            fn=lambda: gr.update(value=None), # Action: clear the dropdown
+            inputs=None,
+            outputs=[saved_voices_dropdown]
+        )
+        prompt_audio.clear(
+            fn=lambda: gr.update(value=None), # Also clear dropdown when 'x' is clicked
+            inputs=None,
+            outputs=[saved_voices_dropdown]
+        )
 
+        # Main generation button
+        gen_button.click(
+            fn=gen_single,
+            inputs=[prompt_audio, saved_voices_dropdown, input_text_single, *advanced_params],
+            outputs=[output_audio, save_voice_group, newly_extracted_mel_state]
+        )
 
+        # Save and Delete buttons
+        save_voice_button.click(fn=save_voice_feature, inputs=[new_voice_name_input, newly_extracted_mel_state], outputs=[saved_voices_dropdown])
+        delete_voice_button.click(fn=delete_voice_feature, inputs=[saved_voices_dropdown], outputs=[saved_voices_dropdown])
+
+# --- Launch Gradio App ---
 if __name__ == "__main__":
-    demo.queue(20)
-    demo.launch(server_name=cmd_args.host, server_port=cmd_args.port, inbrowser=True)
+    demo.queue().launch(server_name=cmd_args.host, server_port=cmd_args.port, inbrowser=True)
