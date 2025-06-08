@@ -75,6 +75,10 @@ class IndexTTS:
         # 进度引用显示（可选）
         self.gr_progress = None
 
+    def set_gr_progress_callback(self,_callback):
+        self.gr_progress = _callback
+        
+
     def extract_features(self, audio_prompt_path: str) -> torch.Tensor:
         print(f">> 提取声音令牌: {audio_prompt_path}")
 
@@ -90,7 +94,8 @@ class IndexTTS:
 
     def _set_gr_progress(self, value, desc):
         if self.gr_progress is not None:
-            self.gr_progress(value, desc=desc)
+            self.gr_progress(value, desc)
+        print("value:",value,"desc:",desc)
 
     # Unchanged `infer` method
     def infer(self, prompt_mel: torch.Tensor, text: str, output_path: str, max_text_tokens_per_sentence=120, verbose=False, **generation_kwargs):
@@ -104,9 +109,9 @@ class IndexTTS:
         text_tokens_list = self.tokenizer.tokenize(text)
         sentences = self.tokenizer.split_sentences(text_tokens_list, max_text_tokens_per_sentence)
         if verbose:
-            print("text token count:", len(text_tokens_list))
-            print("sentences count:", len(sentences))
-            print("max_text_tokens_per_sentence:", max_text_tokens_per_sentence)
+            print("text token count(文本标记计数):", len(text_tokens_list))
+            print("sentences count(句子数):", len(sentences))
+            print("max_text_tokens_per_sentence(每个句子的最大标记数。小值更快推理，消耗内存影响质量):", max_text_tokens_per_sentence)
             print(*sentences, sep="\n")
         do_sample = generation_kwargs.pop("do_sample", True)
         top_p = generation_kwargs.pop("top_p", 0.8)
@@ -209,13 +214,13 @@ class IndexTTS:
         self._set_gr_progress(0.9, "save audio...")
         wav = torch.cat(wavs, dim=1)
         wav_length = wav.shape[-1] / sampling_rate
-        print(f">> Reference audio length: {cond_mel_frame * 256 / sampling_rate:.2f} seconds")
-        print(f">> gpt_gen_time: {gpt_gen_time:.2f} seconds")
-        print(f">> gpt_forward_time: {gpt_forward_time:.2f} seconds")
-        print(f">> bigvgan_time: {bigvgan_time:.2f} seconds")
-        print(f">> Total inference time: {end_time - start_time:.2f} seconds")
-        print(f">> Generated audio length: {wav_length:.2f} seconds")
-        print(f">> RTF: {(end_time - start_time) / wav_length:.4f}")
+        print(f">> Reference audio length(参考音频长度): {cond_mel_frame * 256 / sampling_rate:.2f} seconds")
+        print(f">> gpt_gen_time(生成文本所需的时间): {gpt_gen_time:.2f} seconds")
+        print(f">> gpt_forward_time(前向传播所需的时间): {gpt_forward_time:.2f} seconds")
+        print(f">> bigvgan_time(生成对抗网络时间): {bigvgan_time:.2f} seconds")
+        print(f">> Total inference time(总推断时间): {end_time - start_time:.2f} seconds")
+        print(f">> Generated audio length(生成音频长度): {wav_length:.2f} seconds")
+        print(f">> RTF(实时因子 用来衡量音频处理效率的一个指标): {(end_time - start_time) / wav_length:.4f}")
 
         # save audio
         wav = wav.cpu()  # to cpu
@@ -223,11 +228,11 @@ class IndexTTS:
             # 直接保存音频到指定路径中
             if os.path.isfile(output_path):
                 os.remove(output_path)
-                print(">> remove old wav file:", output_path)
+                print(">> remove old wav file(删除旧的wav文件):", output_path)
             if os.path.dirname(output_path) != "":
                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
             torchaudio.save(output_path, wav.type(torch.int16), sampling_rate)
-            print(">> wav file saved to:", output_path)
+            print(">> wav file saved to(合成的wav音频文件导出到):", output_path)
             return output_path
         else:
             # 返回以符合Gradio的格式要求
@@ -336,7 +341,7 @@ class IndexTTS:
                 - 越大，bucket数量越少，batch越多，推理速度越*快*，占用内存更多，可能影响质量
                 - 越小，bucket数量越多，batch越少，推理速度越*慢*，占用内存和质量更接近于非快速推理
         """
-        print(">> start fast inference...")
+        print("sentences_bucket_max_size(句子存储的最大容量。较大的值导致更快的推理速度):",{sentences_bucket_max_size})
         
         self._set_gr_progress(0, "start fast inference...")
         if verbose:
@@ -352,9 +357,9 @@ class IndexTTS:
 
         sentences = self.tokenizer.split_sentences(text_tokens_list, max_tokens_per_sentence=max_text_tokens_per_sentence)
         if verbose:
-            print(">> text token count:", len(text_tokens_list))
-            print("   splited sentences count:", len(sentences))
-            print("   max_text_tokens_per_sentence:", max_text_tokens_per_sentence)
+            print(">> text token count(文本中所有标记token数量):", len(text_tokens_list))
+            print("   splited sentences count(被分割成的句子数量):", len(sentences))
+            print("   max_text_tokens_per_sentence(每个句子中标记数量的最大值):", max_text_tokens_per_sentence)
             print(*sentences, sep="\n")
         do_sample = generation_kwargs.pop("do_sample", True)
         top_p = generation_kwargs.pop("top_p", 0.8)
@@ -375,14 +380,14 @@ class IndexTTS:
 
         # text processing
         all_text_tokens: List[List[torch.Tensor]] = []
-        self._set_gr_progress(0.1, "text processing...")
+        self._set_gr_progress(0.1, "文本处理...")
         bucket_max_size = sentences_bucket_max_size if self.device != "cpu" else 1
         all_sentences = self.bucket_sentences(sentences, bucket_max_size=bucket_max_size)
         bucket_count = len(all_sentences)
         if verbose:
-            print(">> sentences bucket_count:", bucket_count,
-                  "bucket sizes:", [(len(s), [t["idx"] for t in s]) for s in all_sentences],
-                  "bucket_max_size:", bucket_max_size)
+            print(">> sentences bucket_count(表示句子的桶的数量。在文本转音频的过程中，句子可能会根据长度或其他特性被分组到不同的“桶”中。):", bucket_count,
+                  "bucket sizes(桶的大小):", [(len(s), [t["idx"] for t in s]) for s in all_sentences],
+                  "bucket_max_size(表示桶的最大尺寸。这可能用于限制每个桶中句子的数量或总长度，以确保处理的效率和一致性。):", bucket_max_size)
         for sentences in all_sentences:
             temp_tokens: List[torch.Tensor] = []
             all_text_tokens.append(temp_tokens)
@@ -505,15 +510,15 @@ class IndexTTS:
         self._set_gr_progress(0.9, "save audio...")
         wav = torch.cat(wavs, dim=1)
         wav_length = wav.shape[-1] / sampling_rate
-        print(f">> Reference audio length: {cond_mel_frame * 256 / sampling_rate:.2f} seconds")
-        print(f">> gpt_gen_time: {gpt_gen_time:.2f} seconds")
-        print(f">> gpt_forward_time: {gpt_forward_time:.2f} seconds")
-        print(f">> bigvgan_time: {bigvgan_time:.2f} seconds")
-        print(f">> Total fast inference time: {end_time - start_time:.2f} seconds")
-        print(f">> Generated audio length: {wav_length:.2f} seconds")
-        print(f">> [fast] bigvgan chunk_length: {chunk_length}")
-        print(f">> [fast] batch_num: {all_batch_num} bucket_max_size: {bucket_max_size}", f"bucket_count: {bucket_count}" if bucket_max_size > 1 else "")
-        print(f">> [fast] RTF: {(end_time - start_time) / wav_length:.4f}")
+        print(f">> Reference audio length(参考音频长度): {cond_mel_frame * 256 / sampling_rate:.2f} seconds")
+        print(f">> gpt_gen_time(生成文本时间): {gpt_gen_time:.2f} seconds")
+        print(f">> gpt_forward_time(向前传播的时间): {gpt_forward_time:.2f} seconds")
+        print(f">> bigvgan_time(bigVGAN模型处理音频的时间): {bigvgan_time:.2f} seconds")
+        print(f">> Total fast inference time(总时间): {end_time - start_time:.2f} seconds")
+        print(f">> Generated audio length(生成的音频长度): {wav_length:.2f} seconds")
+        print(f">> [fast] bigvgan chunk_length(BigVGAN处理的音频块长度): {chunk_length}")
+        print(f">> [fast] batch_num(批量处理的数量): {all_batch_num} bucket_max_size(存储桶的最大大小): {bucket_max_size}", f"bucket_count(存储桶数量): {bucket_count}" if bucket_max_size > 1 else "")
+        print(f">> [fast] RTF(实时因子 用来衡量音频处理效率的一个指标): {(end_time - start_time) / wav_length:.4f}")
 
         # save audio
         wav = wav.cpu()  # to cpu
