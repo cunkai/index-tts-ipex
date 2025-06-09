@@ -8,6 +8,7 @@ import time
 import numpy as np
 import torch
 import torchaudio
+import torchaudio.transforms as T
 import traceback
 from flask import Flask, request, jsonify, send_from_directory, render_template, Response, stream_with_context, url_for # <-- IMPORT url_for
 from flask_cors import CORS
@@ -260,6 +261,7 @@ def synthesize():
                     temp_features_cache.clear()
 
         # Step 1: Get the voice mel spectrogram (prompt_mel)
+        safe_voice_id = ''
         if form_data.get('saved_voice_identifier'):
             safe_voice_id = sanitize_filename(form_data['saved_voice_identifier'])
             mel_path = os.path.join(SAVED_VOICE_FEATURES_DIR, f"{safe_voice_id}.cond_mel.npy")
@@ -278,38 +280,59 @@ def synthesize():
             temp_filepath_for_feature_extraction = original_temp_filepath
             files_to_delete_after_task.append(original_temp_filepath)
 
-            crop_start = form_data.get('cropStart', type=float)
-            crop_end = form_data.get('cropEnd', type=float)
-            
-            # 无论是否裁剪，都先加载音频
+            # 1. 定义模型的目标采样率
+            TARGET_SAMPLE_RATE = tts_engine_instance.cfg.bigvgan.sampling_rate
+
+            # 2 加载原始音频，获取其波形和原始采样率
             try:
-                waveform, sample_rate = torchaudio.load(original_temp_filepath)
+                waveform, original_sr = torchaudio.load(original_temp_filepath)
             except Exception as e:
                 # 如果 torchaudio 加载失败，可以返回更明确的错误
                 return jsonify({"error": f"使用 torchaudio 加载音频失败: {e}"}), 500
+
+            # 3. 如果原始采样率和目标不一致，则进行重采样
+            if original_sr != TARGET_SAMPLE_RATE:
+                print(f"Resampling audio from {original_sr} Hz to {TARGET_SAMPLE_RATE} Hz")
+                # 创建重采样器
+                resampler = T.Resample(orig_freq=original_sr, new_freq=TARGET_SAMPLE_RATE).to(DEVICE)
+                waveform = resampler(waveform.to(DEVICE))
+
+            # 4. 现在 `waveform` 已经是目标采样率了，在此基础上进行裁剪
+            crop_start = form_data.get('cropStart', type=float)
+            crop_end = form_data.get('cropEnd', type=float)
+
 
             if crop_start is not None or crop_end is not None:
                 print(f"使用 torchaudio 进行裁剪: start={crop_start}, end={crop_end}")
                 
                 # 将秒转换为采样点
-                start_frame = int(crop_start * sample_rate) if crop_start is not None else 0
-                end_frame = int(crop_end * sample_rate) if crop_end is not None else waveform.shape[1]
+                start_frame = int(crop_start * TARGET_SAMPLE_RATE) if crop_start is not None else 0
+                end_frame = int(crop_end * TARGET_SAMPLE_RATE) if crop_end is not None else waveform.shape[1]
                 
                 # 确保裁剪范围有效
                 if start_frame < end_frame and start_frame < waveform.shape[1]:
-                    cropped_waveform = waveform[:, start_frame:end_frame]
+                    waveform = waveform[:, start_frame:end_frame] # 直接在 tensor 上裁剪
                     
+                    # 创建一个新的裁剪文件名并保存，以便特征提取器从文件读取
                     base_name, _ = os.path.splitext(original_temp_filename)
-                    cropped_filename = f"cropped_{base_name}.wav"
-                    
+                    cropped_filename = f"resampled_cropped_{base_name}.wav"
                     cropped_filepath = os.path.join(TEMP_AUDIO_DIR, cropped_filename)
-                    torchaudio.save(cropped_filepath, cropped_waveform, sample_rate)
+                    
+                    # 保存时，使用 TARGET_SAMPLE_RATE
+                    torchaudio.save(cropped_filepath, waveform.cpu(), TARGET_SAMPLE_RATE)
+                    
                     temp_filepath_for_feature_extraction = cropped_filepath
                     files_to_delete_after_task.append(cropped_filepath)
                 else:
-                    print("Warning: 无效的裁剪时间，将使用完整音频。")
+                    print("Warning: 无效的裁剪时间，将使用完整（但已重采样）的音频。")
+                    # 如果不裁剪，也最好保存一次重采样后的版本，确保后续步骤一致
+                    torchaudio.save(temp_filepath_for_feature_extraction, waveform.cpu(), TARGET_SAMPLE_RATE)
 
+            else:
+                # 如果没有裁剪，也要保存一次重采样后的音频
+                torchaudio.save(temp_filepath_for_feature_extraction, waveform.cpu(), TARGET_SAMPLE_RATE)
             
+            # 5. 使用处理好的文件路径来提取特征
             prompt_mel = tts_engine_instance.extract_features(temp_filepath_for_feature_extraction)
             # 确保 source_identifier_for_save 不是 None
             if source_identifier_for_save:
