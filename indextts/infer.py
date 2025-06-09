@@ -80,8 +80,8 @@ class IndexTTS:
         
 
     def extract_features(self, audio_prompt_path: str) -> torch.Tensor:
-        print(f">> 提取声音令牌: {audio_prompt_path}")
-
+        print(f">> 提取声音Mel谱图: {audio_prompt_path}")
+        
         audio, sr = torchaudio.load(audio_prompt_path)
         audio = torch.mean(audio, dim=0, keepdim=True)
         if audio.shape[0] > 1:
@@ -89,7 +89,7 @@ class IndexTTS:
         audio = torchaudio.transforms.Resample(sr, 24000)(audio)
         cond_mel = MelSpectrogramFeatures()(audio).to(self.device)
         
-        print(">> Mel spectrogram extracted successfully.")
+        print(">> Mel谱图提取成功")
         return cond_mel
 
     def _set_gr_progress(self, value, desc):

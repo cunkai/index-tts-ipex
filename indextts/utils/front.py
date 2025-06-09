@@ -341,90 +341,90 @@ class TextTokenizer:
         decoded = self.sp_model.Decode(ids, out_type=kwargs.pop("out_type", str), **kwargs)
         return de_tokenized_by_CJK_char(decoded, do_lower_case=do_lower_case)
 
+    punctuation_marks_tokens = [
+        ".", "!", "?", "▁.", "▁?", "▁..."
+    ]
+
     @staticmethod
     def split_sentences_by_token(
         tokenized_str: List[str], split_tokens: List[str], max_tokens_per_sentence: int
     ) -> List[List[str]]:
-        """
-        将tokenize后的结果按特定token进一步分割
-        """
-        # 处理特殊情况
-        if len(tokenized_str) == 0:
+        if not tokenized_str:
             return []
-        sentences: List[List[str]] = []
+
+        sentences = []
         current_sentence = []
-        current_sentence_tokens_len = 0
-        for i in range(len(tokenized_str)):
+        current_len = 0
+        i = 0
+
+        while i < len(tokenized_str):
             token = tokenized_str[i]
             current_sentence.append(token)
-            current_sentence_tokens_len += 1
-            if current_sentence_tokens_len <= max_tokens_per_sentence:
-                if token in split_tokens and current_sentence_tokens_len > 2:
-                    if i < len(tokenized_str) - 1:
-                        if tokenized_str[i + 1] in ["'", "▁'"]:
-                            # 后续token是'，则不切分
-                            current_sentence.append(tokenized_str[i + 1])
-                            i += 1
-                    sentences.append(current_sentence)
-                    current_sentence = []
-                    current_sentence_tokens_len = 0
-                continue
-            # 如果当前tokens的长度超过最大限制
-            if not  ("," in split_tokens or "▁," in split_tokens ) and ("," in current_sentence or "▁," in current_sentence): 
-                # 如果当前tokens中有,，则按,分割
-                sub_sentences = TextTokenizer.split_sentences_by_token(
-                    current_sentence, [",", "▁,"], max_tokens_per_sentence=max_tokens_per_sentence
-                )
-            elif "-" not in split_tokens and "-" in current_sentence:
-                # 没有,，则按-分割
-                sub_sentences = TextTokenizer.split_sentences_by_token(
-                    current_sentence, ["-"], max_tokens_per_sentence=max_tokens_per_sentence
-                )
-            else:
-                # 按照长度分割
-                sub_sentences = []
-                for j in range(0, len(current_sentence), max_tokens_per_sentence):
-                    if j + max_tokens_per_sentence < len(current_sentence):
-                        sub_sentences.append(current_sentence[j : j + max_tokens_per_sentence])
-                    else:
-                        sub_sentences.append(current_sentence[j:])
-                warnings.warn(
-                    f"The tokens length of sentence exceeds limit: {max_tokens_per_sentence}, "
-                    f"Tokens in sentence: {current_sentence}."
-                    "Maybe unexpected behavior",
-                    RuntimeWarning,
-                )
-            sentences.extend(sub_sentences)
-            current_sentence = []
-            current_sentence_tokens_len = 0
-        if current_sentence_tokens_len > 0:
-            assert current_sentence_tokens_len <= max_tokens_per_sentence
-            sentences.append(current_sentence)
-        # 如果相邻的句子加起来长度小于最大限制，则合并
-        merged_sentences = []
-        for sentence in sentences:
-            if len(sentence) == 0:
-                continue
-            if len(merged_sentences) == 0:
-                merged_sentences.append(sentence)
-            elif len(merged_sentences[-1]) + len(sentence) <= max_tokens_per_sentence:
-                merged_sentences[-1] = merged_sentences[-1] + sentence
-            else:
-                merged_sentences.append(sentence)
-        return merged_sentences
+            current_len += 1
 
-    punctuation_marks_tokens = [
-        ".",
-        "!",
-        "?",
-        "▁.",
-        # "▁!", # unk
-        "▁?",
-        "▁...", # ellipsis
-    ]
+            should_split = (
+                token in split_tokens and current_len > 2 and
+                not (i + 1 < len(tokenized_str) and tokenized_str[i + 1] in {"'", "▁'"})
+            )
+
+            if current_len <= max_tokens_per_sentence and should_split:
+                sentences.append(current_sentence)
+                current_sentence = []
+                current_len = 0
+                i += 1
+                continue
+
+            if current_len > max_tokens_per_sentence:
+                split_by = []
+                if not any(t in split_tokens for t in [",", "▁,"]) and any(t in current_sentence for t in [",", "▁,"]):
+                    split_by = [",", "▁,"]
+                elif "-" not in split_tokens and "-" in current_sentence:
+                    split_by = ["-"]
+
+                if split_by:
+                    sub_sentences = TextTokenizer.split_sentences_by_token(
+                        current_sentence, split_by, max_tokens_per_sentence
+                    )
+                else:
+                    sub_sentences = [
+                        current_sentence[j: j + max_tokens_per_sentence]
+                        for j in range(0, len(current_sentence), max_tokens_per_sentence)
+                    ]
+                    warnings.warn(
+                        f"[WARNING] Sentence token length exceeds max ({max_tokens_per_sentence}): {current_sentence}",
+                        RuntimeWarning,
+                    )
+
+                sentences.extend(sub_sentences)
+                current_sentence = []
+                current_len = 0
+
+            i += 1
+
+        if current_sentence:
+            assert current_len <= max_tokens_per_sentence
+            sentences.append(current_sentence)
+
+        return TextTokenizer._merge_short_sentences(sentences, max_tokens_per_sentence)
+
+    @staticmethod
+    def _merge_short_sentences(sentences: List[List[str]], max_len: int) -> List[List[str]]:
+        if not sentences:
+            return []
+
+        merged = [sentences[0]]
+
+        for sentence in sentences[1:]:
+            if len(merged[-1]) + len(sentence) <= max_len:
+                merged[-1].extend(sentence)
+            else:
+                merged.append(sentence)
+
+        return merged
+
     def split_sentences(self, tokenized: List[str], max_tokens_per_sentence=120) -> List[List[str]]:
         return TextTokenizer.split_sentences_by_token(
-            tokenized, self.punctuation_marks_tokens, max_tokens_per_sentence=max_tokens_per_sentence
+            tokenized, self.punctuation_marks_tokens, max_tokens_per_sentence
         )
 
 

@@ -7,6 +7,7 @@ import threading
 import time
 import numpy as np
 import torch
+import torchaudio
 import traceback
 from flask import Flask, request, jsonify, send_from_directory, render_template, Response, stream_with_context, url_for # <-- IMPORT url_for
 from flask_cors import CORS
@@ -22,13 +23,6 @@ except Exception as e:
     traceback.print_exc()
     tts_engine_instance = None
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-try:
-    from pydub import AudioSegment
-    print("pydub library loaded.")
-except ImportError:
-    print("WARNING: pydub not installed. Audio cropping will be unavailable.")
-    AudioSegment = None
 
 
 app = Flask(__name__)
@@ -143,15 +137,19 @@ def save_voice_feature():
         return jsonify({"error": "Missing name or source identifier"}), 400
         
     with temp_features_lock:
+        # --- 关键修改：使用 .pop() 方法来获取并移除 ---
         feature_data_to_save = temp_features_cache.pop(source_feature_key, None)
+
     if not feature_data_to_save or 'cond_mel_numpy' not in feature_data_to_save:
-        return jsonify({"error": f"未找到源标识符 '{source_feature_key}' 对应的待保存特征。"}), 404
+        return jsonify({"error": f"未找到源标识符 '{source_feature_key}' 对应的待保存特征，或它已被新的上传覆盖。"}), 404
         
     safe_user_name_id = sanitize_filename(user_given_name)
     np.save(os.path.join(SAVED_VOICE_FEATURES_DIR, f"{safe_user_name_id}.cond_mel.npy"), feature_data_to_save["cond_mel_numpy"])
     meta_info = {"id": safe_user_name_id, "user_given_name": user_given_name}
     with open(os.path.join(SAVED_VOICE_FEATURES_DIR, f"{safe_user_name_id}.meta.json"), 'w', encoding='utf-8') as f:
         json.dump(meta_info, f, ensure_ascii=False, indent=2)
+        
+    print(f"Successfully saved and removed temp feature for key: {source_feature_key}")
     return jsonify({"message": f"声音特征 '{user_given_name}' 已成功保存。", "id": safe_user_name_id, "name": user_given_name})
 
 # --- Synthesis Worker with Progress Handling ---
@@ -227,10 +225,19 @@ def synthesize():
     
     prompt_mel = None
     is_new_upload = False
-    original_temp_filepath_for_key = None
+    source_identifier_for_save = None  
     files_to_delete_after_task = []
 
+
     try:
+        # --- 在处理新请求的开始阶段，清理旧的临时特征 ---
+        if request.files.get('referenceAudioFile') or form_data.get('saved_voice_identifier'):
+            with temp_features_lock:
+                if temp_features_cache:
+                    print(f"Clearing old temp features. Cache size: {len(temp_features_cache)}")
+                    temp_features_cache.clear()
+        # --- 清理逻辑结束 ---
+
         # Step 1: Get the voice mel spectrogram (prompt_mel)
         if form_data.get('saved_voice_identifier'):
             safe_voice_id = sanitize_filename(form_data['saved_voice_identifier'])
@@ -245,29 +252,52 @@ def synthesize():
             original_temp_filepath = os.path.join(TEMP_AUDIO_DIR, original_temp_filename)
             uploaded_file.save(original_temp_filepath)
             
+            source_identifier_for_save = original_temp_filepath
+
             temp_filepath_for_feature_extraction = original_temp_filepath
             files_to_delete_after_task.append(original_temp_filepath)
 
             crop_start = form_data.get('cropStart', type=float)
             crop_end = form_data.get('cropEnd', type=float)
-            if AudioSegment and (crop_start is not None or crop_end is not None):
-                print("--original_temp_filepath: ",original_temp_filepath)
-                audio = AudioSegment.from_file(original_temp_filepath)
-                start_ms = int(crop_start * 1000) if crop_start is not None else 0
-                end_ms = int(crop_end * 1000) if crop_end is not None else len(audio)
-                if start_ms < end_ms:
-                    cropped_audio = audio[start_ms:end_ms]
-                    cropped_filepath = os.path.join(TEMP_AUDIO_DIR, f"cropped_{original_temp_filename}")
-                    # 确保导出格式与引擎兼容，如 wav
-                    cropped_audio.export(cropped_filepath, format="wav")
+            
+            # 无论是否裁剪，都先加载音频
+            try:
+                waveform, sample_rate = torchaudio.load(original_temp_filepath)
+            except Exception as e:
+                # 如果 torchaudio 加载失败，可以返回更明确的错误
+                return jsonify({"error": f"使用 torchaudio 加载音频失败: {e}"}), 500
+
+            if crop_start is not None or crop_end is not None:
+                print(f"使用 torchaudio 进行裁剪: start={crop_start}, end={crop_end}")
+                
+                # 将秒转换为采样点
+                start_frame = int(crop_start * sample_rate) if crop_start is not None else 0
+                end_frame = int(crop_end * sample_rate) if crop_end is not None else waveform.shape[1]
+                
+                # 确保裁剪范围有效
+                if start_frame < end_frame and start_frame < waveform.shape[1]:
+                    cropped_waveform = waveform[:, start_frame:end_frame]
+                    
+                    base_name, _ = os.path.splitext(original_temp_filename)
+                    cropped_filename = f"cropped_{base_name}.wav"
+                    
+                    cropped_filepath = os.path.join(TEMP_AUDIO_DIR, cropped_filename)
+                    torchaudio.save(cropped_filepath, cropped_waveform, sample_rate)
                     temp_filepath_for_feature_extraction = cropped_filepath
                     files_to_delete_after_task.append(cropped_filepath)
+                else:
+                    print("Warning: 无效的裁剪时间，将使用完整音频。")
+
             
             prompt_mel = tts_engine_instance.extract_features(temp_filepath_for_feature_extraction)
-            original_temp_filepath_for_key = original_temp_filepath
-            
-            with temp_features_lock:
-                temp_features_cache[original_temp_filepath_for_key] = {"cond_mel_numpy": prompt_mel.cpu().numpy()}
+            # --- 关键修复点 2: 使用我们之前确定的“钥匙”来存入缓存 ---
+            # 确保 source_identifier_for_save 不是 None
+            if source_identifier_for_save:
+                with temp_features_lock:
+                    temp_features_cache[source_identifier_for_save] = {"cond_mel_numpy": prompt_mel.cpu().numpy()}
+            else:
+                # 这是一个逻辑错误，理论上不应该发生
+                print("Error: source_identifier_for_save is None when it should not be.")
         else:
             return jsonify({"error": "需要参考音频或已保存的声音特征。"}), 400
 
@@ -314,9 +344,10 @@ def synthesize():
         base_url = request.host_url
         with tasks_lock:
             tasks_status[task_id] = {"status": "queued", "progress": 0, "message": "任务已排队", "files_to_delete": files_to_delete_after_task}
-            if is_new_upload and original_temp_filepath_for_key:
+            
+            if is_new_upload and source_identifier_for_save:
                 tasks_status[task_id]["is_from_new_upload"] = True
-                tasks_status[task_id]["source_reference_identifier_for_save"] = original_temp_filepath_for_key
+                tasks_status[task_id]["source_reference_identifier_for_save"] = source_identifier_for_save
         
         
 
@@ -338,7 +369,11 @@ def synthesize():
         print(f"Error in /api/synthesize: {e}")
         traceback.print_exc()
         for f in files_to_delete_after_task:
-            if os.path.exists(f): os.remove(f)
+            if os.path.exists(f): 
+                try:
+                    os.remove(f)
+                except Exception as clean_e:
+                    print(f"清理临时文件 {f} 时出错: {clean_e}")
         return jsonify({"error": f"处理请求时出错: {str(e)}"}), 500
 
 # SSE status stream with cleanup
@@ -370,11 +405,11 @@ def synthesize_stream_status(task_id):
                                 print(f"Error cleaning temp file {f_path}: {e_clean}")
                 
                 # Clean from temp feature cache as well
-                key_to_clean = task_to_clean.get("source_reference_identifier_for_save")
-                if key_to_clean:
-                    with temp_features_lock:
-                        temp_features_cache.pop(key_to_clean, None)
-                        print(f"Cleaned temp feature cache for key: {key_to_clean}")
+                # key_to_clean = task_to_clean.get("source_reference_identifier_for_save")
+                # if key_to_clean:
+                #     with temp_features_lock:
+                #         temp_features_cache.pop(key_to_clean, None)
+                #         print(f"Cleaned temp feature cache for key: {key_to_clean}")
 
     return Response(stream_with_context(generate_status_updates(task_id)), mimetype='text/event-stream')
 

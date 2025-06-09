@@ -35,7 +35,7 @@ class PositionalEncoding(torch.nn.Module):
     def __init__(self,
                  d_model: int,
                  dropout_rate: float,
-                 max_len: int = 5000,
+                 max_len: int = 50000,
                  reverse: bool = False):
         """Construct an PositionalEncoding object."""
         super().__init__()
@@ -93,6 +93,8 @@ class PositionalEncoding(torch.nn.Module):
         """
         # How to subscript a Union type:
         #   https://github.com/pytorch/pytorch/issues/69434
+
+        print("offset: ",offset,"    size: ",size,"  max_len: ",self.max_len)
         if isinstance(offset, int):
             assert offset + size < self.max_len
             pos_emb = self.pe[:, offset:offset + size]
