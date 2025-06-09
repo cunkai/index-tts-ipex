@@ -701,6 +701,7 @@ document.addEventListener('DOMContentLoaded', function () {
             const initialResult = await initialResponse.json();
             if (initialResult.task_id) {
                 showStatus('合成任务已启动...', 'info');
+                populateHistoryAudioList();
                 currentEventSource = new EventSource(`${API_BASE_URL}/api/synthesize-stream-status/${initialResult.task_id}`);
                 currentEventSource.onmessage = function(event) {
                     const data = JSON.parse(event.data);
@@ -728,6 +729,7 @@ document.addEventListener('DOMContentLoaded', function () {
                             sourceIdentifierForSave = data.source_reference_identifier_for_save;
                             if (saveVoiceFeatureContainer) saveVoiceFeatureContainer.style.display = 'block';
                         }
+                        
                         currentEventSource.close();
                         setSynthesisButtonsDisabled(false);
                     } else if (data.status === 'failed' || data.status === 'error') {
