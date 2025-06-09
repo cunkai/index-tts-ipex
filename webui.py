@@ -3,6 +3,7 @@ import os
 import uuid
 import json
 import re
+import traceback
 import threading
 import time
 import numpy as np
@@ -12,6 +13,7 @@ import torchaudio.transforms as T
 import traceback
 from flask import Flask, request, jsonify, send_from_directory, render_template, Response, stream_with_context, url_for # <-- IMPORT url_for
 from flask_cors import CORS
+from datetime import datetime
 
 # --- Engine and pydub/FFmpeg setup (remains the same) ---
 try:
@@ -38,6 +40,8 @@ RULESETS_DIR = os.path.join(STATIC_DIR, 'replacement_rulesets')
 SAVED_VOICE_FEATURES_DIR = os.path.join(STATIC_DIR, 'saved_voice_features')
 for dir_path in [OUTPUT_AUDIO_DIR, TEMP_AUDIO_DIR, RULESETS_DIR, SAVED_VOICE_FEATURES_DIR]:
     os.makedirs(dir_path, exist_ok=True)
+
+    
 
 # 提供音频文件的路由
 @app.route('/audio/<path:filename>')
@@ -75,11 +79,51 @@ def create_download_filename(text, voice_name=None):
     else:
         return sanitized_text_part
 
-
 @app.route('/')
 def index():
     # 确保在项目根目录下有一个 'templates' 文件夹，且其中包含 'index.html'
     return render_template('index.html')
+
+#历史歌曲
+@app.route('/api/history-audios')
+def history_audios():
+    audio_dir = OUTPUT_AUDIO_DIR
+    if not os.path.exists(audio_dir):
+        return jsonify([])
+    
+    audio_files = []
+    for filename in os.listdir(audio_dir):
+        if filename.lower().endswith(('.wav', '.mp3', '.ogg')):
+            file_path = os.path.join(audio_dir, filename)
+            stat = os.stat(file_path)
+            audio_files.append({
+                'name': filename,
+                'url': f'/static/outputs/{filename}',
+                'date': datetime.fromtimestamp(stat.st_ctime).strftime('%Y-%m-%d %H:%M')
+            })
+    
+    # 按创建时间倒序排序
+    audio_files.sort(key=lambda x: x['date'], reverse=True)
+    return jsonify(audio_files)
+
+#删除本地文件
+@app.route('/api/delete-audio',  methods=['DELETE'])
+def delete_audio():
+    data = request.get_json() 
+    filename = data.get('filename') 
+    if not filename:
+        return jsonify({'error': '缺少文件名参数'}), 400 
+    
+    file_path = os.path.join(OUTPUT_AUDIO_DIR,  filename)
+    
+    if not os.path.exists(file_path): 
+        return jsonify({'error': '文件不存在'}), 404 
+    
+    try:
+        os.remove(file_path) 
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500 
 
 # --- Ruleset and Voice Listing/Deleting APIs ---
 @app.route('/api/rulesets', methods=['GET'])

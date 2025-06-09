@@ -1,6 +1,4 @@
 // static/js/script.js
-// 完整版本 - Updated for WaveSurfer.js v7 and Correct File Loading
-
 const APP_CONFIG = {
     maxRefAudioDuration: 60.0, 
     advancedSettings: [
@@ -82,15 +80,52 @@ document.addEventListener('DOMContentLoaded', function () {
         if (wavesurfer) { if (currentBlobUrl) { URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; } wavesurfer.destroy(); wavesurfer = null; wsRegions = null; }
         if (typeof WaveSurfer === 'undefined' || typeof WaveSurfer.Regions === 'undefined') { showStatus(`错误: WaveSurfer 或其 Regions 插件加载失败`, "error"); return false; }
         wsRegions = WaveSurfer.Regions.create();
-        wavesurfer = WaveSurfer.create({ container: waveformContainer, waveColor: '#2c3e50', progressColor: '#3498db', cursorColor: '#e74c3c', barWidth: 2, barRadius: 3, height: 100, plugins: [wsRegions] });
+        wsHover = WaveSurfer.Hover.create({
+            lineColor: '#ff0000',
+            lineWidth: 2,
+            labelBackground: '#555',
+            labelColor: '#fff',
+            labelSize: '11px',
+        })
+
+        wavesurfer = WaveSurfer.create({    container: waveformContainer,
+                                            waveColor: '#2c3e50', 
+                                            progressColor: '#3498db', 
+                                            cursorColor: '#e74c3c', 
+                                            barWidth: 10, barRadius: 5,
+                                            height: 100, 
+                                            plugins: [wsRegions,wsHover],
+                                        });
+
+        wsRegions.enableDragSelection({
+            color: 'rgba(8, 247, 155, 0.14)',
+            content: '已选区域',
+
+        })
         wavesurfer.on('decode', () => { const duration = wavesurfer.getDuration(); if (wfPlayPauseBtn) { wfPlayPauseBtn.textContent = '播放'; wfPlayPauseBtn.disabled = false; } if (wfStopBtn) wfStopBtn.disabled = false; resetCropInputs(duration); });
-        wavesurfer.on('error', (err) => showStatus(`音频波形错误: ${err}`, 'error'));
+        wavesurfer.on('error', (err) => console.log(`音频波形错误: ${err}`, 'error'));
         wavesurfer.on('play', () => wfPlayPauseBtn && (wfPlayPauseBtn.textContent = '暂停'));
         wavesurfer.on('pause', () => wfPlayPauseBtn && (wfPlayPauseBtn.textContent = '播放'));
-        wsRegions.on('region-created', (region) => { const regions = wsRegions.getRegions(); if (regions.length > 1) { regions[0].remove(); } activeAudioRegion = region; updateCropInputsFromRegion(region); });
+        wsRegions.on('region-created', (region) => { 
+                                                    const regions = wsRegions.getRegions(); 
+                                                    if (regions.length > 1) 
+                                                    { 
+                                                        regions[0].remove(); 
+
+                                                    } 
+                                                    activeAudioRegion = region; 
+                                                    updateCropInputsFromRegion(region); 
+                                                });
         wsRegions.on('region-updated', (region) => updateCropInputsFromRegion(region));
         wsRegions.on('region-removed', (region) => { if (activeAudioRegion && activeAudioRegion.id === region.id) { activeAudioRegion = null; resetCropInputs(wavesurfer ? wavesurfer.getDuration() : 0); } });
-        if (wfPlayPauseBtn) wfPlayPauseBtn.onclick = () => wavesurfer.playPause();
+        wsRegions.on('region-clicked', (region, e) => {
+            e.stopPropagation() // prevent triggering a click on the waveform
+            activeRegion = region
+            region.play(true)
+        })
+        if (wfPlayPauseBtn) wfPlayPauseBtn.onclick = () => {
+            wavesurfer.playPause() 
+        }
         if (wfStopBtn) wfStopBtn.onclick = () => wavesurfer.stop();
         return true;
     }
@@ -99,11 +134,19 @@ document.addEventListener('DOMContentLoaded', function () {
     function initOutputWaveSurfer() {
         if (outputWavesurfer) { outputWavesurfer.destroy(); outputWavesurfer = null; }
         if (typeof WaveSurfer === 'undefined') { return false; }
-        outputWavesurfer = WaveSurfer.create({ container: outputWaveformContainer, waveColor: '#2c3e50', progressColor: '#2ecc71', cursorColor: '#e74c3c', barWidth: 2, barRadius: 3, height: 80 });
+        outputWavesurfer = WaveSurfer.create({  container: outputWaveformContainer,
+                                                waveColor: '#2c3e50', 
+                                                progressColor: '#2ecc71',
+                                                cursorColor: '#e74c3c', 
+                                                barWidth: 2, 
+                                                barRadius: 3, 
+                                                height: 80,
+                                            });
         outputWavesurfer.on('ready', () => { if (outputWfPlayPauseBtn) { outputWfPlayPauseBtn.textContent = '播放'; outputWfPlayPauseBtn.disabled = false; } });
         outputWavesurfer.on('play', () => outputWfPlayPauseBtn && (outputWfPlayPauseBtn.textContent = '暂停'));
         outputWavesurfer.on('pause', () => outputWfPlayPauseBtn && (outputWfPlayPauseBtn.textContent = '播放'));
         outputWavesurfer.on('finish', () => outputWfPlayPauseBtn && (outputWfPlayPauseBtn.textContent = '播放'));
+
         if (outputWfPlayPauseBtn) outputWfPlayPauseBtn.onclick = () => outputWavesurfer.playPause();
         return true;
     }
@@ -111,6 +154,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // --- Audio Loading Functions ---
     function loadAudioToWaveSurfer(urlOrFile) {
         if (!initWaveSurfer()) return;
+        console.log("urlOrFile: ",urlOrFile)
         if (referenceAudioPlayerContainer) referenceAudioPlayerContainer.style.display = 'block';
         if (urlOrFile instanceof File) { currentBlobUrl = URL.createObjectURL(urlOrFile); wavesurfer.load(currentBlobUrl); } else { wavesurfer.load(urlOrFile); }
     }
@@ -606,8 +650,8 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!text) { showStatus('请输入文本。', 'error'); return; }
         setSynthesisButtonsDisabled(true);
         showStatus('准备合成请求...', 'info');
-        if (outputPanel) outputPanel.style.display = 'none';
-        if (downloadAudioLink) downloadAudioLink.style.display = 'none';
+        // if (outputPanel) outputPanel.style.display = 'none';
+        // if (downloadAudioLink) downloadAudioLink.style.display = 'none';
         if (saveVoiceFeatureContainer) saveVoiceFeatureContainer.style.display = 'none';
         sourceIdentifierForSave = null;
         const formData = new FormData();
@@ -670,37 +714,16 @@ document.addEventListener('DOMContentLoaded', function () {
                             const audioUrl = data.audio_url;
 
                             if(outputAudioPlayer) outputAudioPlayer.src = audioUrl;
+
                             loadAudioToOutputWaveSurfer(audioUrl);
-                            
-                            // =================== 关键修改：动态创建下载链接 ===================
-                            if(outputWaveformControls) {
-                                // 1. 先移除旧的下载链接（如果存在）
-                                const oldLink = document.getElementById('download-audio-link');
-                                if (oldLink) {
-                                    oldLink.remove();
-                                }
+                                                        
+                            downloadAudioLink.href = audioUrl;
 
-                                // 2. 创建一个新的 <a> 标签
-                                const newDownloadLink = document.createElement('a');
-                                newDownloadLink.id = 'download-audio-link'; // 保持ID一致
-                                newDownloadLink.href = audioUrl;
-                                newDownloadLink.className = 'button-small'; // 保持样式
-                                newDownloadLink.textContent = '下载音频';
-                                
-                                // 3. 设置最重要的 download 属性
-                                newDownloadLink.download = data.download_filename || 'synthesis_result.wav';
-
-                                // 4. 将新的链接添加到控制容器中
-                                //    这里用 appendChild 会加到最后，如果想保持在播放按钮后，可以用 insertBefore
-                                outputWaveformControls.appendChild(newDownloadLink);
-
-                                console.log("New download link created:", newDownloadLink);
-                                console.log("Download attribute set to:", newDownloadLink.download);
-                            }
-                            // =================== 修改结束 =================================
-
-                            if(outputPanel) outputPanel.style.display = 'block';
+                            downloadAudioLink.download = data.download_filename || 'synthesis_result.wav';
                         }
+
+                        if(outputPanel) outputPanel.style.display = 'block';
+                    
                         if (data.is_from_new_upload && data.source_reference_identifier_for_save) {
                             sourceIdentifierForSave = data.source_reference_identifier_for_save;
                             if (saveVoiceFeatureContainer) saveVoiceFeatureContainer.style.display = 'block';
@@ -732,14 +755,136 @@ document.addEventListener('DOMContentLoaded', function () {
     if (synthesizeNormalButton) synthesizeNormalButton.addEventListener('click', () => handleSynthesis('普通推理'));
     if (synthesizeBatchButton) synthesizeBatchButton.addEventListener('click', () => handleSynthesis('批次推理'));
 
+    // 添加新函数获取历史音频
+    async function populateHistoryAudioList() {
+        const container = document.getElementById('history-audio-list-container');
+        if (!container) return;
+        
+        container.innerHTML = '<p>正在加载历史合成音乐...</p>';
+        
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/history-audios`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const audios = await response.json();
+            
+            if (audios.length === 0) {
+                container.innerHTML = '<p style="text-align:center; color:#777;">没有历史合成音乐。</p>';
+                return;
+            }
+            
+            container.innerHTML = '';
+            audios.forEach(audio => {
+                const item = document.createElement('div');
+                item.className = 'history-audio-item';
+                
+                const infoDiv = document.createElement('div');
+                infoDiv.className = 'history-audio-info';
+                
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'history-audio-filename';
+                nameSpan.textContent = audio.name;
+                nameSpan.title = audio.name;
+                
+                const dateSpan = document.createElement('span');
+                dateSpan.className = 'history-audio-date';
+                dateSpan.textContent = `创建于: ${audio.date}`;
+                
+                infoDiv.appendChild(nameSpan);
+                infoDiv.appendChild(dateSpan);
+                
+                const actionsDiv = document.createElement('div');
+                actionsDiv.className = 'history-audio-actions';
+                
+                const playBtn = document.createElement('button');
+                playBtn.className = 'history-audio-play-btn';
+                playBtn.textContent = '播放';
+                playBtn.onclick = () => playHistoryAudio(audio.url);
+
+                const deleteBtn = document.createElement('button'); 
+                deleteBtn.className  = 'history-audio-delete-btn';
+                deleteBtn.textContent  = '删除';
+                deleteBtn.onclick  = () => deleteHistoryAudio(audio.name,  item);
+                
+                const downloadBtn = document.createElement('a');
+                downloadBtn.className = 'history-audio-download-btn';
+                downloadBtn.textContent = '下载';
+                downloadBtn.href = audio.url;
+                downloadBtn.download = audio.name;
+                
+                actionsDiv.appendChild(playBtn);
+                actionsDiv.appendChild(downloadBtn);
+                actionsDiv.appendChild(deleteBtn); 
+                
+                item.appendChild(infoDiv);
+                item.appendChild(actionsDiv);
+                container.appendChild(item);
+            });
+        } catch (error) {
+            console.error('加载历史音频失败:', error);
+            container.innerHTML = `<p class="status error">加载历史音频失败: ${error.message}</p>`;
+        }
+    }
+
+    // 删除函数 
+    async function deleteHistoryAudio(filename, itemElement) {
+        if (!confirm(`确定要永久删除 "${filename}" 吗？`)) return;
+        
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/delete-audio`, {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({  filename })
+            });
+            
+            if (!response.ok)  {
+                const error = await response.json(); 
+                throw new Error(error.error  || '删除失败');
+            }
+            
+            // 从UI中移除该项 
+            itemElement.remove(); 
+            
+            // 检查是否已无项目 
+            const container = document.getElementById('history-audio-list-container'); 
+            if (container.children.length  === 0) {
+                container.innerHTML  = '<p style="text-align:center; color:#777;">没有历史合成音乐。</p>';
+            }
+            
+            showStatus(`已删除: ${filename}`, 'success');
+        } catch (error) {
+            console.error(' 删除音频失败:', error);
+            showStatus(`删除失败: ${error.message}`,  'error');
+        }
+    }
+
+
+    // 播放历史音频
+    function playHistoryAudio(url) {
+        if (outputPanel) outputPanel.style.display = 'block';
+        if (outputAudioPlayer) outputAudioPlayer.src = url;
+        loadAudioToOutputWaveSurfer(url);
+        
+        // 更新下载链接
+        if (downloadAudioLink) {
+            const filename = url.substring(url.lastIndexOf('/') + 1);
+            downloadAudioLink.href = url;
+            downloadAudioLink.download = filename;
+        }
+        
+        showStatus('正在播放历史音频', 'info');
+    }
+
+
     function runInitializations() {
         if (!initWaveSurfer()) {
             console.warn("Initial WaveSurfer setup failed.");
         }
+        if (outputPanel) outputPanel.style.display = 'none';
         populateSavedVoicesList();
         populateRulesetListDisplay();
         populateAdvancedSettings(); 
         updateMainPreview(); 
+        populateHistoryAudioList();
     }
     
     runInitializations();
