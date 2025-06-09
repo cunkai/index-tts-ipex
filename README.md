@@ -2,6 +2,7 @@
 
 <div align="center">
 <img src='assets/index_icon.png' width="250"/>
+  index-tts-ipex intel显卡版
 </div>
 
 [🎬 生成效果展示](https://www.bilibili.com/video/BV14WTNzoE3w)
