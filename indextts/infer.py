@@ -360,7 +360,8 @@ class IndexTTS:
             print(">> text token count(文本中所有标记token数量):", len(text_tokens_list))
             print("   splited sentences count(被分割成的句子数量):", len(sentences))
             print("   max_text_tokens_per_sentence(每个句子中标记数量的最大值):", max_text_tokens_per_sentence)
-            print(*sentences, sep="\n")
+            for i, s in enumerate(sentences, start=1):
+                print(f"句子{i}. {s}")
         do_sample = generation_kwargs.pop("do_sample", True)
         top_p = generation_kwargs.pop("top_p", 0.8)
         top_k = generation_kwargs.pop("top_k", 30)
@@ -396,7 +397,7 @@ class IndexTTS:
                 text_tokens = self.tokenizer.convert_tokens_to_ids(sent)
                 text_tokens = torch.tensor(text_tokens, dtype=torch.int32, device=self.device).unsqueeze(0)
                 if verbose:
-                    print(text_tokens)
+                    # print(text_tokens)
                     print(f"text_tokens shape: {text_tokens.shape}, text_tokens type: {text_tokens.dtype}")
                     # debug tokenizer
                     text_token_syms = self.tokenizer.convert_ids_to_tokens(text_tokens[0].tolist())
@@ -420,6 +421,7 @@ class IndexTTS:
             m_start_time = time.perf_counter()
             with torch.no_grad():
                 with torch.amp.autocast(batch_text_tokens.device.type, enabled=self.dtype is not None, dtype=self.dtype):
+                    
                     temp_codes = self.gpt.inference_speech(auto_conditioning, batch_text_tokens,
                                         cond_mel_lengths=cond_mel_lengths,
                                         # text_lengths=text_len,

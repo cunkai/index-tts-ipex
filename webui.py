@@ -52,6 +52,29 @@ def sanitize_filename(name):
     name = re.sub(r'[^\w\s.-]', '', str(name)).strip()
     return re.sub(r'[-\s]+', '-', name).replace('/', '_').replace('\\', '_')
 
+# --- 辅助函数 ---
+def create_download_filename(text, voice_name=None):
+    """
+    根据文本和声音名称生成一个建议的下载文件名。
+    """
+    # 1. 提取文本前10个非标点符号的字符
+    # \w 匹配字母、数字、下划线
+    # \u4e00-\u9fa5 匹配中文字符
+    text_chars = re.findall(r'[\w\u4e00-\u9fa5]', text)
+    sanitized_text_part = "".join(text_chars)[:10]
+
+    # 如果没有有效文本，使用一个默认值
+    if not sanitized_text_part:
+        sanitized_text_part = "synthesis_result"
+
+    # 2. 如果提供了声音名称，添加为前缀
+    if voice_name:
+        sanitized_voice_name = sanitize_filename(voice_name)
+        return f"{sanitized_voice_name}_{sanitized_text_part}"
+    else:
+        return sanitized_text_part
+
+
 @app.route('/')
 def index():
     # 确保在项目根目录下有一个 'templates' 文件夹，且其中包含 'index.html'
@@ -153,7 +176,7 @@ def save_voice_feature():
     return jsonify({"message": f"声音特征 '{user_given_name}' 已成功保存。", "id": safe_user_name_id, "name": user_given_name})
 
 # --- Synthesis Worker with Progress Handling ---
-def synthesis_worker(task_id, text_input, prompt_mel, output_filename, infer_mode,_max_text_tokens_per_sentence,_verbose_tts,baseurl, **kwargs):
+def synthesis_worker(task_id, text_input, prompt_mel, output_filename, infer_mode, _max_text_tokens_per_sentence, _verbose_tts, **kwargs):
 
     def progress_callback(fraction, description):
         with tasks_lock:
@@ -191,18 +214,17 @@ def synthesis_worker(task_id, text_input, prompt_mel, output_filename, infer_mod
         
         with tasks_lock:
             task_entry = tasks_status.get(task_id, {})
-            # The worker now sets the RELATIVE path, not the full URL.
             relative_path = f"/static/outputs/{os.path.basename(output_filename)}"
-
-            print(baseurl)
-
-            full_audio_url = f"{baseurl.rstrip('/')}/{relative_path}"
+            download_filename_base = create_download_filename(text_input)
+            _, extension = os.path.splitext(output_filename)
+            suggested_filename = f"{download_filename_base}{extension}"
             
             task_entry.update({
                 "status": "completed", 
                 "progress": 100, 
                 "message": "合成完成!",
-                "audio_url": full_audio_url
+                "audio_url": relative_path,  # <-- 直接返回相对路径
+                "download_filename": suggested_filename
             })
 
     except Exception as e:
@@ -230,13 +252,12 @@ def synthesize():
 
 
     try:
-        # --- 在处理新请求的开始阶段，清理旧的临时特征 ---
+        # Step 0:  在处理新请求的开始阶段，清理旧的临时特征 ---
         if request.files.get('referenceAudioFile') or form_data.get('saved_voice_identifier'):
             with temp_features_lock:
                 if temp_features_cache:
                     print(f"Clearing old temp features. Cache size: {len(temp_features_cache)}")
                     temp_features_cache.clear()
-        # --- 清理逻辑结束 ---
 
         # Step 1: Get the voice mel spectrogram (prompt_mel)
         if form_data.get('saved_voice_identifier'):
@@ -290,7 +311,6 @@ def synthesize():
 
             
             prompt_mel = tts_engine_instance.extract_features(temp_filepath_for_feature_extraction)
-            # --- 关键修复点 2: 使用我们之前确定的“钥匙”来存入缓存 ---
             # 确保 source_identifier_for_save 不是 None
             if source_identifier_for_save:
                 with temp_features_lock:
@@ -339,9 +359,10 @@ def synthesize():
             print(f"Warning: Could not apply replacements due to invalid format: {e}")
 
         # Step 4: Start the synthesis thread
-        output_filename = os.path.join(OUTPUT_AUDIO_DIR, f"output_{task_id}.wav")
+        
+        output_filename = os.path.join(OUTPUT_AUDIO_DIR, create_download_filename(text_input,safe_voice_id)+".wav")
         infer_mode = form_data.get('infer_mode', '普通推理')
-        base_url = request.host_url
+
         with tasks_lock:
             tasks_status[task_id] = {"status": "queued", "progress": 0, "message": "任务已排队", "files_to_delete": files_to_delete_after_task}
             
@@ -349,17 +370,15 @@ def synthesize():
                 tasks_status[task_id]["is_from_new_upload"] = True
                 tasks_status[task_id]["source_reference_identifier_for_save"] = source_identifier_for_save
         
-        
 
         thread = threading.Thread(target=synthesis_worker, 
-                                  args=(task_id, 
+                                args=(task_id, 
                                         text_input, 
                                         prompt_mel, 
                                         output_filename, 
                                         infer_mode,
                                         max_text_tokens_per_sentence,
                                         verbose_tts,
-                                        base_url
                                         ), 
                                         kwargs=kwargs_for_engine
                                 )

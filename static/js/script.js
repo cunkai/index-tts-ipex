@@ -58,7 +58,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const rulesetEditorStatusDiv = document.getElementById('ruleset-editor-status');
     const textInput = document.getElementById('text-input');
     const replacementPreview = document.getElementById('replacement-preview');
-    
+    const outputWaveformControls = document.getElementById('output-waveform-controls'); // 获取控制按钮的容器
+
     // --- Global State ---
     let wavesurfer = null;
     let wsRegions = null;
@@ -625,6 +626,12 @@ document.addEventListener('DOMContentLoaded', function () {
         let audioSourceAvailable = false;
         if (selectedSavedVoiceId) {
             formData.append('saved_voice_identifier', selectedSavedVoiceId);
+            // --- 找到并发送所选声音的名称 ---
+            const selectedVoiceElement = document.querySelector(`.ruleset-list-item[data-voice-id="${selectedSavedVoiceId}"] .ruleset-name-display`);
+            if (selectedVoiceElement) {
+                formData.append('saved_voice_name', selectedVoiceElement.textContent);
+            }
+
             audioSourceAvailable = true;
         } else if (uploadedReferenceAudioFile) {
             formData.append('referenceAudioFile', uploadedReferenceAudioFile);
@@ -658,19 +665,40 @@ document.addEventListener('DOMContentLoaded', function () {
                     if (data.status === 'completed') {
                         statusType = 'success';
                         statusText = `合成成功！`;
-                        console.log(data.audioUrl)
+                        console.log(data)
                         if (data.audio_url) {
-                            // --- THIS IS THE FIX ---
-                            // Construct a full, absolute URL to prevent 404 errors.
                             const audioUrl = data.audio_url;
 
                             if(outputAudioPlayer) outputAudioPlayer.src = audioUrl;
                             loadAudioToOutputWaveSurfer(audioUrl);
-                            if(downloadAudioLink) {
-                                downloadAudioLink.href = audioUrl;
-                                downloadAudioLink.download = data.audio_url.split('/').pop();
-                                downloadAudioLink.style.display = 'inline-block';
+                            
+                            // =================== 关键修改：动态创建下载链接 ===================
+                            if(outputWaveformControls) {
+                                // 1. 先移除旧的下载链接（如果存在）
+                                const oldLink = document.getElementById('download-audio-link');
+                                if (oldLink) {
+                                    oldLink.remove();
+                                }
+
+                                // 2. 创建一个新的 <a> 标签
+                                const newDownloadLink = document.createElement('a');
+                                newDownloadLink.id = 'download-audio-link'; // 保持ID一致
+                                newDownloadLink.href = audioUrl;
+                                newDownloadLink.className = 'button-small'; // 保持样式
+                                newDownloadLink.textContent = '下载音频';
+                                
+                                // 3. 设置最重要的 download 属性
+                                newDownloadLink.download = data.download_filename || 'synthesis_result.wav';
+
+                                // 4. 将新的链接添加到控制容器中
+                                //    这里用 appendChild 会加到最后，如果想保持在播放按钮后，可以用 insertBefore
+                                outputWaveformControls.appendChild(newDownloadLink);
+
+                                console.log("New download link created:", newDownloadLink);
+                                console.log("Download attribute set to:", newDownloadLink.download);
                             }
+                            // =================== 修改结束 =================================
+
                             if(outputPanel) outputPanel.style.display = 'block';
                         }
                         if (data.is_from_new_upload && data.source_reference_identifier_for_save) {
